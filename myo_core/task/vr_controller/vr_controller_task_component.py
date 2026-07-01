@@ -23,7 +23,9 @@ import torch
 
 import myo_core.common as myo
 from ..task_registry import myo_register_task
-from .vr_controller_task_config import PointingTargetConfig, VrControllerTaskConfig
+from .vr_controller_task_config import VrControllerTaskConfig
+from ..universal.universal_task_config import PointingTargetConfig
+
 
 _VR_ENTITY_NAME = "vr_controller_robot"
 

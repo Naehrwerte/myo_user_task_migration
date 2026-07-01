@@ -5,7 +5,6 @@ from hydra.utils import instantiate
 from myo_core.common.config import Vec3, ScalarRange, Vec3Range
 from ..task_config import TaskConfig
 
-
 ShapeType = Literal["sphere", "box"]
 
 
@@ -16,35 +15,6 @@ class ReachConfig:
     end_effector_site: str = "ray_origin"
     ray_end_site: str = "ray_end"
     dwell_continuous: bool = False
-
-
-@dataclass
-class TargetConfig:
-    position: Vec3Range = field(default_factory=lambda: Vec3Range(
-        min=(0.8, -0.7, -0.7),
-        max=(1.5, 0.7, 0.7)
-    ))
-    rgb: Vec3Range = field(default_factory=lambda: Vec3Range(
-        min=(0, 0, 0),
-        max=(1, 1, 1)
-    ))
-
-    def __post_init__(self) -> None:
-        self.position = Vec3Range.of(self.position)
-        self.rgb = Vec3Range.of(self.rgb)
-
-
-@dataclass
-class PointingTargetConfig(TargetConfig):
-    shape: ShapeType = "sphere"
-    size: ScalarRange = field(default_factory=lambda: ScalarRange(
-        value=0.05
-    ))
-    dwell_duration: float = 0.25
-
-    def __post_init__(self) -> None:
-        super().__post_init__()
-        self.size = ScalarRange.of(self.size)
 
 
 
