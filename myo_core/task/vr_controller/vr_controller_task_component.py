@@ -292,7 +292,7 @@ def _find_body_in_spec(root_body, target_name: str):
         result = _find_body_in_spec(child, target_name)
         if result is not None:
             return result
-        child = child.next_body()
+        child = child.next_body(root_body)  
     return None
 
 
