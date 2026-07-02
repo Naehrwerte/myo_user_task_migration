@@ -63,7 +63,7 @@ class VrControllerConfig:
 
 @dataclass
 class VrControllerTaskConfig(TaskConfig):
-    model_path: str = "myo_user/envs/myo/assets/arm/mobl_arms_index_universal_myouser.xml"
+    model_path: str = "myo_user/envs/myo/assets/arm/mobl_arms_index_vr_myouser.xml"
 
     targets: list[Any] = field(default_factory=list)
 
