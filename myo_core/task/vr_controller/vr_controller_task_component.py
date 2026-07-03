@@ -124,6 +124,21 @@ def _phase_successfully_completed(
 
     return (completed_count > phase_id) | currently_completing_phase
 
+def _euclidean_inside_target(
+        env: ManagerBasedRlEnv,
+        asset_cfg: SceneEntityCfg
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    asset: TaskEntity = env.scene[asset_cfg.name]
+    current_target_id = asset.current_target_id
+    target_size_id = asset.target_size_ids[current_target_id]
+
+    ray_origin = asset.data.site_pos_w[asset.env_ids, asset.ray_origin_site_id]
+    target_pos = asset.target_pos[asset.env_ids, current_target_id]
+    target_size = asset.data.model.geom_size[asset.env_ids, target_size_id, 0]
+
+    distance = torch.linalg.vector_norm(ray_origin - target_pos, dim=-1)
+    return distance < target_size, distance, target_size
+
 
 @dataclass
 class TaskEntityCfg(EntityCfg):
@@ -140,7 +155,7 @@ class TaskEntity(Entity):
     task_cfg: VrControllerTaskConfig
 
     # index tensors
-    end_effector_site_id: int
+    ray_origin_site_id: int
     target_pos_ids: torch.Tensor  # [num_targets], long
     target_size_ids: torch.Tensor  # [num_targets], long
     env_ids: torch.Tensor  # [num_envs], long
@@ -174,9 +189,10 @@ class SequentialTaskLogic(ManagerTermBase):
         asset: TaskEntity = env.scene[_VR_ENTITY_NAME]
         asset_cfg: SceneEntityCfg = cfg.params['asset_cfg']
 
+        self.inside_target_fn = cfg.params.get('inside_target_fn', _euclidean_inside_target)
         self.asset = asset
 
-        asset.end_effector_site_id = asset_cfg.site_ids[0]
+        asset.ray_origin_site_id = asset_cfg.site_ids[0]
         asset.target_pos_ids = torch.tensor(asset_cfg.body_ids, dtype=torch.long, device=env.device)
         asset.target_size_ids = torch.tensor(asset_cfg.geom_ids, dtype=torch.long, device=env.device)
         asset.env_ids = torch.arange(env.num_envs, dtype=torch.long, device=env.device)
@@ -192,7 +208,8 @@ class SequentialTaskLogic(ManagerTermBase):
         asset.current_target_dwell_steps = asset.target_dwell_steps[asset.current_target_id]
 
         asset.target_pos = asset.data.body_com_pos_w[asset.env_ids[:, None], asset.target_pos_ids]
-        asset.inside_target, asset.distance_to_target, asset.target_size = self._inside_target()
+        asset.inside_target, asset.distance_to_target, asset.target_size = self.inside_target_fn(env, asset_cfg)
+
         asset.remaining_target_distances = torch.zeros((env.num_envs, asset.num_targets), dtype=torch.float32,
                                                        device=env.device)
 
@@ -231,6 +248,7 @@ class SequentialTaskLogic(ManagerTermBase):
     def __call__(self, env: ManagerBasedRlEnv, env_ids: None, asset_cfg: SceneEntityCfg) -> None:
         asset = self.asset
 
+
         completed = asset.current_phase_completed
 
         asset.completed_target_count += completed
@@ -245,6 +263,9 @@ class SequentialTaskLogic(ManagerTermBase):
         asset.current_target_dwell_steps = asset.target_dwell_steps[
             asset.current_target_id
         ]
+
+        asset.inside_target, asset.distance_to_target, asset.target_size = \
+            self.inside_target_fn(env, asset_cfg)
 
         (
             asset.inside_target,
@@ -261,20 +282,6 @@ class SequentialTaskLogic(ManagerTermBase):
                 asset.steps_inside_target >= asset.current_target_dwell_steps
         )
 
-    def _inside_target(self) -> torch.Tensor:
-        asset = self.asset
-
-        current_target_id = asset.current_target_id
-        target_size_id = asset.target_size_ids[current_target_id]
-
-        ee_pos = asset.data.site_pos_w[asset.env_ids, asset.end_effector_site_id]
-        target_pos = asset.target_pos[asset.env_ids, current_target_id]
-        target_size = asset.data.model.geom_size[asset.env_ids, target_size_id, 0]
-
-        distance_to_target = torch.linalg.vector_norm(ee_pos - target_pos, dim=-1, keepdim=True).reshape(-1)
-        inside_target = distance_to_target < target_size
-
-        return inside_target, distance_to_target, target_size
 
 
 @dataclass
@@ -294,16 +301,6 @@ def _find_body_in_spec(root_body, target_name: str):
             return result
         child = child.next_body(root_body)
     return None
-
-
-def _quat_rotate(q: np.ndarray, v: np.ndarray) -> np.ndarray:
-    w, x, y, z = q
-    R = np.array([
-        [1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)],
-        [2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)],
-        [2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)],
-    ])
-    return R @ v
 
 
 def raycast_inside_target(
@@ -330,7 +327,7 @@ def raycast_inside_target(
     return inside_target, perp_dist, target_radius
 
 
-def _ee_pos(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+def _ray_origin(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     asset = env.scene[asset_cfg.name]
     return asset.data.site_pos_w[:, asset_cfg.site_ids[0]]
 
@@ -388,7 +385,7 @@ class VrControllerTaskComponent(myo.MyoComponent):
             "qvel": ObservationTermCfg(func=myo.joint_qvel, params={"asset_cfg": entity_cfg}),
             "qacc": ObservationTermCfg(func=myo.joint_qacc, params={"asset_cfg": entity_cfg}),
             "act": ObservationTermCfg(func=myo.act, params={"asset_cfg": entity_cfg}),
-            "ee_pos": ObservationTermCfg(func=_ee_pos, params={"asset_cfg": entity_cfg}),
+            "ray_origin": ObservationTermCfg(func=_ray_origin, params={"asset_cfg": entity_cfg}),
             "ray_dir": ObservationTermCfg(func=_ray_dir_world, params={"asset_cfg": entity_cfg}),
             "target_pos": ObservationTermCfg(func=_target_pos, params={"asset_cfg": entity_cfg}),
             "target_size": ObservationTermCfg(func=_target_size, params={"asset_cfg": entity_cfg}),
@@ -596,58 +593,4 @@ class VrControllerTaskComponent(myo.MyoComponent):
                 size=geom_size,
                 rgba=geom_rgba,
             )
-
-        #self._add_controller_geom(spec)
-
         return spec, dr_
-
-    def _add_controller_geom(self, spec: mujoco.MjSpec) -> None:
-        vr_cfg = self.cfg.vr_controller
-
-        hand_body = _find_body_in_spec(spec.worldbody, vr_cfg.hand_body_name)
-        if hand_body is None:
-            raise RuntimeError(
-                f"Body '{vr_cfg.hand_body_name}' nicht im MjSpec-Baum gefunden. "
-                f"Prüfe model_path={self.cfg.model_path!r}."
-            )
-
-        ctrl_pos = np.array(vr_cfg.controller_pos)
-        ctrl_quat = np.array(vr_cfg.controller_quat)
-
-        axis_in_hand = _quat_rotate(ctrl_quat, np.array(vr_cfg.ray_axis))
-        ray_start_offset_hand = _quat_rotate(ctrl_quat, np.array(vr_cfg.ray_start_offset))
-        ray_start = ctrl_pos + ray_start_offset_hand
-        ray_end_pos = ray_start + axis_in_hand * vr_cfg.ray_length
-
-        ctrl_geom = hand_body.add_geom()
-        ctrl_geom.name = "controller-right"
-        ctrl_geom.type = mujoco.mjtGeom.mjGEOM_MESH
-        ctrl_geom.mesh = vr_cfg.controller_mesh
-        ctrl_geom.pos = ctrl_pos
-        ctrl_geom.quat = ctrl_quat
-        ctrl_geom.mass = vr_cfg.controller_mass
-        ctrl_geom.rgba = np.array([0.24, 0.24, 0.24, 1.0])
-        ctrl_geom.contype = 0
-        ctrl_geom.conaffinity = 0
-
-        ray_geom = hand_body.add_geom()
-        ray_geom.name = "ray-indicator"
-        ray_geom.type = mujoco.mjtGeom.mjGEOM_CAPSULE
-        ray_geom.fromto = np.concatenate([ray_start, ray_end_pos])
-        ray_geom.size = np.array([vr_cfg.ray_radius, 0.0, 0.0])
-        ray_geom.rgba = np.array([1.0, 0.0, 0.0, 0.85])
-        ray_geom.contype = 0
-        ray_geom.conaffinity = 0
-        ray_geom.density = 0.0
-
-        # Wichtig: diese Namen müssen exakt mit self.cfg.reach.end_effector_site
-        # und self.cfg.reach.ray_end_site übereinstimmen (s. Antworttext).
-        origin_site = hand_body.add_site()
-        origin_site.name = vr_cfg.ray_origin_site_name
-        origin_site.pos = ray_start.copy()
-        origin_site.size = np.array([0.005, 0.0, 0.0])
-
-        end_site = hand_body.add_site()
-        end_site.name = vr_cfg.ray_end_site_name
-        end_site.pos = ray_end_pos.copy()
-        end_site.size = np.array([0.005, 0.0, 0.0])

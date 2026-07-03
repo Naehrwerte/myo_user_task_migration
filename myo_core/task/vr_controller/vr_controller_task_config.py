@@ -17,7 +17,6 @@ class ReachConfig:
     dwell_continuous: bool = False
 
 
-
 @dataclass
 class DistractorConfig:
     count: int = 0
@@ -78,7 +77,7 @@ class VrControllerTaskConfig(TaskConfig):
         'qvel',
         'qacc',
         'act',
-        'ee_pos',
+        'ray_origin',
         "ray_dir"
     ])
 
