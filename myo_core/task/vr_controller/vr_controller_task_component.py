@@ -124,21 +124,6 @@ def _phase_successfully_completed(
 
     return (completed_count > phase_id) | currently_completing_phase
 
-def _euclidean_inside_target(
-        env: ManagerBasedRlEnv,
-        asset_cfg: SceneEntityCfg
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    asset: TaskEntity = env.scene[asset_cfg.name]
-    current_target_id = asset.current_target_id
-    target_size_id = asset.target_size_ids[current_target_id]
-
-    ray_origin = asset.data.site_pos_w[asset.env_ids, asset.ray_origin_site_id]
-    target_pos = asset.target_pos[asset.env_ids, current_target_id]
-    target_size = asset.data.model.geom_size[asset.env_ids, target_size_id, 0]
-
-    distance = torch.linalg.vector_norm(ray_origin - target_pos, dim=-1)
-    return distance < target_size, distance, target_size
-
 
 @dataclass
 class TaskEntityCfg(EntityCfg):
@@ -156,6 +141,7 @@ class TaskEntity(Entity):
 
     # index tensors
     ray_origin_site_id: int
+    ray_end_site_id: int
     target_pos_ids: torch.Tensor  # [num_targets], long
     target_size_ids: torch.Tensor  # [num_targets], long
     env_ids: torch.Tensor  # [num_envs], long
@@ -189,10 +175,10 @@ class SequentialTaskLogic(ManagerTermBase):
         asset: TaskEntity = env.scene[_VR_ENTITY_NAME]
         asset_cfg: SceneEntityCfg = cfg.params['asset_cfg']
 
-        self.inside_target_fn = cfg.params.get('inside_target_fn', _euclidean_inside_target)
         self.asset = asset
 
         asset.ray_origin_site_id = asset_cfg.site_ids[0]
+        asset.ray_end_site_id = asset_cfg.site_ids[1]
         asset.target_pos_ids = torch.tensor(asset_cfg.body_ids, dtype=torch.long, device=env.device)
         asset.target_size_ids = torch.tensor(asset_cfg.geom_ids, dtype=torch.long, device=env.device)
         asset.env_ids = torch.arange(env.num_envs, dtype=torch.long, device=env.device)
@@ -208,7 +194,7 @@ class SequentialTaskLogic(ManagerTermBase):
         asset.current_target_dwell_steps = asset.target_dwell_steps[asset.current_target_id]
 
         asset.target_pos = asset.data.body_com_pos_w[asset.env_ids[:, None], asset.target_pos_ids]
-        asset.inside_target, asset.distance_to_target, asset.target_size = self.inside_target_fn(env, asset_cfg)
+        asset.inside_target, asset.distance_to_target, asset.target_size = self._inside_target()
 
         asset.remaining_target_distances = torch.zeros((env.num_envs, asset.num_targets), dtype=torch.float32,
                                                        device=env.device)
@@ -248,7 +234,6 @@ class SequentialTaskLogic(ManagerTermBase):
     def __call__(self, env: ManagerBasedRlEnv, env_ids: None, asset_cfg: SceneEntityCfg) -> None:
         asset = self.asset
 
-
         completed = asset.current_phase_completed
 
         asset.completed_target_count += completed
@@ -264,9 +249,6 @@ class SequentialTaskLogic(ManagerTermBase):
             asset.current_target_id
         ]
 
-        asset.inside_target, asset.distance_to_target, asset.target_size = \
-            self.inside_target_fn(env, asset_cfg)
-
         (
             asset.inside_target,
             asset.distance_to_target,
@@ -281,6 +263,28 @@ class SequentialTaskLogic(ManagerTermBase):
         asset.current_phase_completed = (
                 asset.steps_inside_target >= asset.current_target_dwell_steps
         )
+
+    def _inside_target(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        asset = self.asset
+
+        current_target_id = asset.current_target_id
+        target_size_id = asset.target_size_ids[current_target_id]
+
+        ray_origin = asset.data.site_pos_w[asset.env_ids, asset.ray_origin_site_id]
+        ray_end = asset.data.site_pos_w[asset.env_ids, asset.ray_end_site_id]
+        target_position = asset.target_pos[asset.env_ids, current_target_id]
+        target_radius = asset.data.model.geom_size[asset.env_ids, target_size_id, 0]
+
+        ray_dir = torch.nn.functional.normalize(ray_end - ray_origin, dim=-1, eps=1e-8)
+
+        v = target_position - ray_origin
+        proj = (v * ray_dir).sum(dim=-1)
+        perp_vec = v - proj[:, None] * ray_dir
+        distance_to_target = torch.linalg.vector_norm(perp_vec, dim=-1)
+
+        inside_target = (distance_to_target < target_radius) & (proj > 0.0)
+
+        return inside_target, distance_to_target, target_radius
 
 
 
@@ -302,29 +306,6 @@ def _find_body_in_spec(root_body, target_name: str):
         child = child.next_body(root_body)
     return None
 
-
-def raycast_inside_target(
-    env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    asset = env.scene[asset_cfg.name]
-    current_target_id = asset.current_target_id
-    target_size_id = asset.target_size_ids[current_target_id]
-
-    ray_origin = asset.data.site_pos_w[asset.env_ids, asset_cfg.site_ids[0]]
-    ray_end = asset.data.site_pos_w[asset.env_ids, asset_cfg.site_ids[1]]
-    target_position = asset.target_pos[asset.env_ids, current_target_id]
-    target_radius = asset.data.model.geom_size[asset.env_ids, target_size_id, 0]
-
-    ray_dir = torch.nn.functional.normalize(ray_end - ray_origin, dim=-1, eps=1e-8)
-
-    v = target_position - ray_origin
-    proj = (v * ray_dir).sum(dim=-1)
-    perp_vec = v - proj[:, None] * ray_dir
-    perp_dist = torch.linalg.vector_norm(perp_vec, dim=-1)
-
-    inside_target = (perp_dist < target_radius) & (proj > 0.0)
-
-    return inside_target, perp_dist, target_radius
 
 
 def _ray_origin(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
@@ -449,7 +430,7 @@ class VrControllerTaskComponent(myo.MyoComponent):
             ),
             "task_logic_update": EventTermCfg(
                 func=SequentialTaskLogic,
-                params={"asset_cfg": target_entity_cfg, "inside_target_fn": raycast_inside_target},
+                params={"asset_cfg": target_entity_cfg},
                 mode="step",
             ),
         })
