@@ -1,3 +1,4 @@
 defaults:
+  - myo_config
   - task: universal
   - _self_
