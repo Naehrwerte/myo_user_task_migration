@@ -9,8 +9,13 @@ from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 from ..universal.universal_task_component import SequentialTaskLogic, TaskEntity
 
-# RGBA used to highlight the button that currently has to be pressed.
-_CURRENT_TARGET_RGBA = (0.0, 1.0, 0.0, 1.0)
+# Buttons are colored purely by their role in the sequence (per environment):
+#   green  -> the button currently being pressed
+#   red    -> still to be pressed (has an occurrence at/after the current phase)
+#   blue   -> already done (or not part of this episode's sequence)
+_RGBA_CURRENT = (0.0, 1.0, 0.0, 1.0)
+_RGBA_TODO = (1.0, 0.0, 0.0, 0.5)
+_RGBA_DONE = (0.0, 0.0, 1.0, 0.5)
 
 
 class NumpadTaskLogic(SequentialTaskLogic):
@@ -55,15 +60,6 @@ class NumpadTaskLogic(SequentialTaskLogic):
 
         asset.remaining_target_distances = torch.zeros(
             (env.num_envs, asset.seq_len), dtype=torch.float32, device=env.device
-        )
-
-        base_rgba = []
-        for t in asset.task_cfg.targets:
-            value = getattr(t.rgb, "value", None)
-            rgb = [1.0, 1.0, 1.0] if value is None else [float(c) for c in value]
-            base_rgba.append(rgb + [1.0])
-        asset.target_base_rgba = torch.tensor(
-            base_rgba, dtype=torch.float32, device=env.device
         )
 
     def reset(self, env_ids: torch.Tensor | None) -> None:
@@ -195,27 +191,48 @@ def np_sequence_completed(
 
 
 @requires_model_fields("geom_rgba")
-def np_highlight_current_target(
+def np_color_targets_by_state(
     env: ManagerBasedRlEnv,
     env_ids: torch.Tensor | None,
     asset_cfg: SceneEntityCfg,
 ) -> None:
-    """Color the button that currently has to be pressed (per environment).
+    """Color every pool button by its role in the sequence (per environment).
 
-    Every pool button is reset to its configured base color and the current
-    target button is painted :data:`_CURRENT_TARGET_RGBA` (green). Runs as a
-    per-step event so the highlight follows the randomized sequence; the
+    Each physical button is painted green/red/blue depending on whether it is the
+    current target, still to be pressed, or already done — its configured color is
+    not used. A button may occur several times in the (with-replacement) sequence;
+    it counts as "todo" while it still has an occurrence at or after the current
+    phase, otherwise as "done". Buttons absent from the sequence are shown as done.
+
+    Runs as a per-step event so the colors follow the randomized sequence; the
     ``requires_model_fields`` decorator makes mjlab expand ``geom_rgba`` to
     per-world memory so each environment can be colored independently.
     """
     asset: TaskEntity = env.scene[asset_cfg.name]
 
-    geom_ids = asset.target_size_ids
+    device = asset.phase_seq.device
+    num_envs = asset.phase_seq.shape[0]
+    num_targets = asset.num_targets
 
-    env.sim.model.geom_rgba[:, geom_ids, :] = asset.target_base_rgba
+    buttons = torch.arange(num_targets, device=device)          # [P]
+    phase_idx = torch.arange(asset.seq_len, device=device)      # [S]
 
-    current_geom = geom_ids[asset.current_target_id]  # [num_envs]
-    highlight = torch.tensor(
-        _CURRENT_TARGET_RGBA, dtype=torch.float32, device=asset.target_base_rgba.device
-    )
-    env.sim.model.geom_rgba[asset.env_ids, current_geom, :] = highlight
+    # For every (env, button): does the button occur, and at which last phase?
+    occ = asset.phase_seq[:, :, None] == buttons[None, None, :]  # [E, S, P]
+    appears = occ.any(dim=1)                                     # [E, P]
+    last_occ = torch.where(occ, phase_idx[None, :, None], torch.full_like(occ, -1, dtype=torch.long))
+    last_occ = last_occ.max(dim=1).values                       # [E, P]
+
+    current_phase = asset.current_phase[:, None]                # [E, 1]
+    is_current = buttons[None, :] == asset.current_target_id[:, None]  # [E, P]
+    is_todo = appears & (last_occ >= current_phase) & ~is_current
+
+    current = torch.tensor(_RGBA_CURRENT, dtype=torch.float32, device=device)
+    todo = torch.tensor(_RGBA_TODO, dtype=torch.float32, device=device)
+    done = torch.tensor(_RGBA_DONE, dtype=torch.float32, device=device)
+
+    colors = done.expand(num_envs, num_targets, 4).clone()      # default: done/inactive
+    colors[is_todo] = todo
+    colors[is_current] = current                                # highest priority
+
+    env.sim.model.geom_rgba[:, asset.target_size_ids, :] = colors

@@ -10,7 +10,7 @@ from ..universal.universal_task_component import UniversalTaskComponent
 from .numpad_task_config import NumpadTaskConfig
 from .numpad_task_logic import (
     NumpadTaskLogic,
-    np_highlight_current_target,
+    np_color_targets_by_state,
     np_phase_progress,
     np_sequence_completed,
     np_sequential_distance_reward,
@@ -81,9 +81,12 @@ class NumpadTaskComponent(UniversalTaskComponent):
                 reduce="last",
             )
 
+        # Color the buttons by their sequence state (todo/current/done) while
+        # rendering. Only wired into the play config: no effect during headless
+        # training and it would otherwise force per-world geom_rgba memory.
         if play:
             cfg.events["numpad_target_coloring"] = EventTermCfg(
-                func=np_highlight_current_target,
+                func=np_color_targets_by_state,
                 params={"asset_cfg": entity_cfg},
                 mode="step",
             )
