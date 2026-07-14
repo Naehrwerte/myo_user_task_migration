@@ -3,3 +3,4 @@ from .task_registry import myo_create_task
 
 from .universal import UniversalTaskConfig, UniversalTaskComponent
 from .vr_controller import VrControllerTaskConfig, VrControllerTaskComponent
+from .numpad import NumpadTaskConfig, NumpadTaskComponent

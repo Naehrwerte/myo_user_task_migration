@@ -20,7 +20,7 @@ import numpy as np
 import torch
 
 import myo_core.common as myo
-from .universal_task_config import UniversalTaskConfig, PointingTargetConfig
+from .universal_task_config import UniversalTaskConfig, PointingTargetConfig, ButtonTargetConfig
 from ..task_registry import myo_register_task
 
 _UNIVERSAL_ENTITY_NAME = "universal_robot"
@@ -133,6 +133,11 @@ class TaskEntity(Entity):
     env_ids: torch.Tensor                        # [num_envs], long
     current_target_id: torch.Tensor              # [num_envs], long
 
+    # button targets (touch-based completion)
+    target_is_button: torch.Tensor               # [num_targets], bool
+    target_min_touch_force: torch.Tensor         # [num_targets], float
+    target_sensor_adr: torch.Tensor              # [num_targets], long (-1 for non-buttons)
+
     # int tensors
     completed_target_count: torch.Tensor         # [num_envs], int
     steps_inside_target: torch.Tensor            # [num_envs], int
@@ -170,12 +175,30 @@ class SequentialTaskLogic(ManagerTermBase):
 
         asset.completed_target_count = torch.zeros(env.num_envs, dtype=torch.int32, device=env.device)
         asset.steps_inside_target = torch.zeros(env.num_envs, dtype=torch.int32, device=env.device)
-        asset.target_dwell_steps = torch.tensor(
-            [math.ceil(t.dwell_duration / env.step_dt) for t in asset.task_cfg.targets],
-            dtype=torch.int32,
-            device=env.device
+
+        is_button = [isinstance(t, ButtonTargetConfig) for t in asset.task_cfg.targets]
+        asset.target_is_button = torch.tensor(is_button, dtype=torch.bool, device=env.device)
+        asset.target_min_touch_force = torch.tensor(
+            [getattr(t, "min_touch_force", 0.0) for t in asset.task_cfg.targets],
+            dtype=torch.float32,
+            device=env.device,
         )
+
+        dwell_steps = []
+        for t, button in zip(asset.task_cfg.targets, is_button):
+            steps = math.ceil(t.dwell_duration / env.step_dt)
+            dwell_steps.append(max(1, steps) if button else steps)
+        asset.target_dwell_steps = torch.tensor(dwell_steps, dtype=torch.int32, device=env.device)
         asset.current_target_dwell_steps = asset.target_dwell_steps[asset.current_target_id]
+
+        sensor_adr = []
+        for target_id, button in enumerate(is_button):
+            if not button:
+                sensor_adr.append(-1)
+                continue
+            sensor = env.sim.mj_model.sensor(f"{_UNIVERSAL_ENTITY_NAME}/sensor_target_{target_id}")
+            sensor_adr.append(int(sensor.adr[0]))
+        asset.target_sensor_adr = torch.tensor(sensor_adr, dtype=torch.long, device=env.device)
 
         asset.target_pos = asset.data.body_com_pos_w[asset.env_ids[:, None], asset.target_pos_ids]
         asset.inside_target, asset.distance_to_target, asset.target_size = self._inside_target()
@@ -259,6 +282,14 @@ class SequentialTaskLogic(ManagerTermBase):
         distance_to_target = torch.linalg.vector_norm(ee_pos - target_pos, dim=-1, keepdim=True).reshape(-1)
         inside_target = distance_to_target < target_size
 
+        is_button = asset.target_is_button[current_target_id]
+        if is_button.any():
+            sensor_adr = asset.target_sensor_adr[current_target_id].clamp(min=0)
+            touch_force = asset.data.data.sensordata[asset.env_ids, sensor_adr]
+            min_force = asset.target_min_touch_force[current_target_id]
+            button_pressed = touch_force >= min_force
+            inside_target = torch.where(is_button, button_pressed, inside_target)
+
         return inside_target, distance_to_target, target_size
 
 @dataclass
@@ -277,6 +308,13 @@ class UniversalTaskComponent(myo.MyoComponent):
 
     def modify_env_cfg(self, cfg: ManagerBasedRlEnvCfg, play: bool) -> None:
         _, target_dr, model_names = self._create_model()
+
+        # Collidable button boxes form BOX<->MESH pairs with the hand meshes,
+        # which mujoco_warp rejects while MULTICCD is enabled (the hand meshes
+        # carry a non-zero margin). Disable MULTICCD when any button is present.
+        if any(isinstance(t, ButtonTargetConfig) for t in self.cfg.targets):
+            if "multiccd" not in cfg.sim.mujoco.disableflags:
+                cfg.sim.mujoco.disableflags = (*cfg.sim.mujoco.disableflags, "multiccd")
 
         cfg.scene.entities.update({
             _UNIVERSAL_ENTITY_NAME: TaskEntityCfg(
@@ -306,6 +344,14 @@ class UniversalTaskComponent(myo.MyoComponent):
             geom_names=[f"geom_target_{i}" for i in range(num_targets)],
             site_names=[self.cfg.reach.end_effector_site]
         )
+
+        # Expose the resolved scene-entity configs so subclasses (e.g. the numpad
+        # task) can overwrite individual sequence-dependent terms after calling
+        # super().modify_env_cfg() without re-deriving them. Purely informational,
+        # does not change universal behaviour.
+        self._entity_cfg = entity_cfg
+        self._target_entity_cfg = target_entity_cfg
+        self._num_targets = num_targets
 
         _obs_terms_complete = {
             "time": ObservationTermCfg(func=myo.time),
@@ -473,57 +519,135 @@ class UniversalTaskComponent(myo.MyoComponent):
         dr = TargetDomainRandomization()
 
         for target_id, target in enumerate(self.cfg.targets):
-            target_body_name = f"body_target_{target_id}"
-            target_geom_name = f"geom_target_{target_id}"
-
-            if not isinstance(target, PointingTargetConfig):
-                raise ValueError(f"Currently only pointing targets are implemented")
-            target: PointingTargetConfig = target
-
-            body_pos = np.array(target_origin, copy=True)
-            if target.position.value is not None:
-                body_pos += np.array(target.position.value[:3])
+            if isinstance(target, ButtonTargetConfig):
+                self._add_button_target(spec, dr, target_id, target, target_origin)
+            elif isinstance(target, PointingTargetConfig):
+                self._add_pointing_target(spec, dr, target_id, target, target_origin)
             else:
-                dr.body_pos[target_body_name] = {
-                    dim: (
-                        target_origin[dim] + target.position.min[dim],
-                        target_origin[dim] + target.position.max[dim]
-                    ) for dim in range(3)
-                }
-
-            target_body = spec.worldbody.add_body(
-                name=target_body_name,
-                pos=body_pos
-            )
-
-            geom_size = np.ones(3)
-            if target.size.value != None:
-                geom_size *= target.size.value
-            else:
-                dr.geom_size[target_geom_name] = {
-                    dim: (
-                        target.size.min,
-                        target.size.max
-                    ) for dim in range(3)
-                }
-
-            geom_rgba = np.ones(4)
-            if target.rgb.value != None:
-                geom_rgba[:3] = np.array(target.rgb.value)
-            else:
-                dr.geom_rgb[target_geom_name] = {
-                    dim: (
-                        target.rgb.min[dim],
-                        target.rgb.max[dim]
-                    ) for dim in range(3)
-                }
-
-            target_geom = target_body.add_geom(
-                name=target_geom_name,
-                type=mujoco.mjtGeom.mjGEOM_SPHERE if target.shape == 'sphere' else mujoco.mjtGeom.mjGEOM_BOX,
-                pos=np.zeros(3),
-                size=geom_size,
-                rgba=geom_rgba
-            )
+                raise ValueError(f"Unsupported target type: {type(target).__name__}")
 
         return spec, dr
+
+    def _resolve_body_pos(
+        self,
+        dr: TargetDomainRandomization,
+        target_body_name: str,
+        position,
+        target_origin: np.ndarray,
+    ) -> np.ndarray:
+        body_pos = np.array(target_origin, copy=True)
+        if position.value is not None:
+            body_pos += np.array(position.value[:3])
+        else:
+            dr.body_pos[target_body_name] = {
+                dim: (
+                    target_origin[dim] + position.min[dim],
+                    target_origin[dim] + position.max[dim],
+                ) for dim in range(3)
+            }
+        return body_pos
+
+    def _resolve_rgba(
+        self,
+        dr: TargetDomainRandomization,
+        target_geom_name: str,
+        rgb,
+    ) -> np.ndarray:
+        geom_rgba = np.ones(4)
+        if rgb.value is not None:
+            geom_rgba[:3] = np.array(rgb.value)
+        else:
+            dr.geom_rgb[target_geom_name] = {
+                dim: (rgb.min[dim], rgb.max[dim]) for dim in range(3)
+            }
+        return geom_rgba
+
+    def _add_pointing_target(
+        self,
+        spec: mujoco.MjSpec,
+        dr: TargetDomainRandomization,
+        target_id: int,
+        target: PointingTargetConfig,
+        target_origin: np.ndarray,
+    ) -> None:
+        target_body_name = f"body_target_{target_id}"
+        target_geom_name = f"geom_target_{target_id}"
+
+        body_pos = self._resolve_body_pos(dr, target_body_name, target.position, target_origin)
+        target_body = spec.worldbody.add_body(name=target_body_name, pos=body_pos)
+
+        geom_size = np.ones(3)
+        if target.size.value is not None:
+            geom_size *= target.size.value
+        else:
+            dr.geom_size[target_geom_name] = {
+                dim: (target.size.min, target.size.max) for dim in range(3)
+            }
+
+        geom_rgba = self._resolve_rgba(dr, target_geom_name, target.rgb)
+
+        target_body.add_geom(
+            name=target_geom_name,
+            type=mujoco.mjtGeom.mjGEOM_SPHERE if target.shape == 'sphere' else mujoco.mjtGeom.mjGEOM_BOX,
+            pos=np.zeros(3),
+            size=geom_size,
+            rgba=geom_rgba,
+        )
+
+    def _add_button_target(
+        self,
+        spec: mujoco.MjSpec,
+        dr: TargetDomainRandomization,
+        target_id: int,
+        target: ButtonTargetConfig,
+        target_origin: np.ndarray,
+    ) -> None:
+        target_body_name = f"body_target_{target_id}"
+        target_geom_name = f"geom_target_{target_id}"
+        target_site_name = f"site_target_{target_id}"
+        target_sensor_name = f"sensor_target_{target_id}"
+
+        body_pos = self._resolve_body_pos(dr, target_body_name, target.position, target_origin)
+        target_body = spec.worldbody.add_body(
+            name=target_body_name,
+            pos=body_pos,
+            euler=np.array(target.euler),
+        )
+
+        geom_size = np.ones(3)
+        if target.size.value is not None:
+            geom_size = np.array(target.size.value[:3])
+        else:
+            dr.geom_size[target_geom_name] = {
+                dim: (target.size.min[dim], target.size.max[dim]) for dim in range(3)
+            }
+
+        geom_rgba = self._resolve_rgba(dr, target_geom_name, target.rgb)
+
+        # Collidable box the fingertip physically pushes against.
+        target_body.add_geom(
+            name=target_geom_name,
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            pos=np.zeros(3),
+            size=geom_size,
+            rgba=geom_rgba,
+            margin=target.geom_margin,
+            contype=1,
+            conaffinity=1,
+        )
+
+        # Touch-sensing zone sitting on the button surface.
+        site_pos = np.array(target.site_pos.value[:3]) if target.site_pos.value is not None else np.zeros(3)
+        site_size = np.array(target.site_size.value[:3]) if target.site_size.value is not None else geom_size
+        target_body.add_site(
+            name=target_site_name,
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            pos=site_pos,
+            size=site_size,
+        )
+        spec.add_sensor(
+            name=target_sensor_name,
+            type=mujoco.mjtSensor.mjSENS_TOUCH,
+            objtype=mujoco.mjtObj.mjOBJ_SITE,
+            objname=target_site_name,
+        )

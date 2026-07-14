@@ -1,0 +1,102 @@
+# Numpad task: press a randomly generated sequence of physical buttons.
+#
+# Migrated from the myosuite_dev `MyoUserNumpad` environment onto the universal
+# task framework. The `targets` list is a fixed pool of buttons (the full 10-key
+# numpad, digits 0-9) that is ALWAYS shown. Unlike the universal task, the list
+# order is NOT the press order: at every reset a sequence of `sequence_length`
+# buttons is drawn at random from the pool (with replacement, so digits may
+# repeat), independently per environment.
+#
+# Positions are relative to the `reference_site`. A button completes when its
+# touch sensor registers a normal force of at least `min_touch_force`
+# (see ButtonTargetConfig for the size/euler/force defaults applied per button).
+defaults:
+  - _self_
+
+# Number of button presses per episode (length of the random sequence).
+sequence_length: 4
+
+reach:
+  reference_site: humphant
+  end_effector_site: fingertip
+
+reward:
+  weights:
+    distance: 1
+    phase_bonus: 0
+    done: 10
+    neural_effort: 0.0
+    jac_effort: 1
+
+# Full numpad pool (list index == digit). All buttons are rendered every episode;
+# the press sequence is sampled from these indices at reset.
+targets:
+  # Button "0" (bottom row)
+  - _target_: ${target:button}
+    position:
+      value: [0.30, -0.06, -0.36]
+    rgb:
+      value: [0.2, 0.2, 0.2]
+
+  # Button "1"
+  - _target_: ${target:button}
+    position:
+      value: [0.35, -0.06, -0.28]
+    rgb:
+      value: [0.5, 0.5, 0.5]
+
+  # Button "2"
+  - _target_: ${target:button}
+    position:
+      value: [0.35, -0.12, -0.28]
+    rgb:
+      value: [0.7, 0.7, 0.7]
+
+  # Button "3"
+  - _target_: ${target:button}
+    position:
+      value: [0.35, -0.18, -0.28]
+    rgb:
+      value: [0.9, 0.9, 0.9]
+
+  # Button "4"
+  - _target_: ${target:button}
+    position:
+      value: [0.40, -0.06, -0.20]
+    rgb:
+      value: [1.0, 1.0, 0.0]
+
+  # Button "5" (center)
+  - _target_: ${target:button}
+    position:
+      value: [0.40, -0.12, -0.20]
+    rgb:
+      value: [0.0, 1.0, 1.0]
+
+  # Button "6"
+  - _target_: ${target:button}
+    position:
+      value: [0.40, -0.18, -0.20]
+    rgb:
+      value: [1.0, 0.0, 1.0]
+
+  # Button "7" (top-left)
+  - _target_: ${target:button}
+    position:
+      value: [0.45, -0.06, -0.12]
+    rgb:
+      value: [1.0, 0.0, 0.0]
+
+  # Button "8"
+  - _target_: ${target:button}
+    position:
+      value: [0.45, -0.12, -0.12]
+    rgb:
+      value: [0.0, 1.0, 0.0]
+
+  # Button "9"
+  - _target_: ${target:button}
+    position:
+      value: [0.45, -0.18, -0.12]
+    rgb:
+      value: [0.0, 0.0, 1.0]

@@ -12,7 +12,7 @@ ShapeType = Literal["sphere", "box"]
 @dataclass
 class ReachConfig:
     reference_site: str = "humphant"
-    reference_offset: Vec3 = field(default_factory=lambda: (0.0, 0.0, 0.0))
+    reference_offset: Vec3 = field(default_factory=lambda: [0.0, 0.0, 0.0])
     end_effector_site: str = "fingertip"
     dwell_continuous: bool = False
 
@@ -50,16 +50,25 @@ class ButtonTargetConfig(TargetConfig):
     size: Vec3Range = field(default_factory=lambda: Vec3Range(
         value=(0.025, 0.025, 0.01)
     ))
+    site_size: Vec3Range = field(default_factory=lambda: Vec3Range(
+        value=(0.02, 0.02, 0.01)
+    ))
     site_pos: Vec3Range = field(default_factory=lambda: Vec3Range(
         value=(0.0, 0.0, 0.01)
     ))
-    euler: Vec3 = field(default_factory=lambda: (0, -0.79, 0))
-    geom_margin: float = 0.001
+    euler: Vec3 = field(default_factory=lambda: [0.0, -0.79, 0.0])
+    # NOTE: mujoco_warp does not support non-zero geom margin while MULTICCD is
+    # enabled (the default). Keep this at 0.0 unless MULTICCD is disabled.
+    geom_margin: float = 0.0
     min_touch_force: float = 1.0
+    # Number of consecutive contact steps required to register the press.
+    # 0 means "immediate on press" and is internally clamped to a single step.
+    dwell_duration: float = 0.0
 
     def __post_init__(self) -> None:
         super().__post_init__()
         self.size = Vec3Range.of(self.size)
+        self.site_size = Vec3Range.of(self.site_size)
         self.site_pos = Vec3Range.of(self.site_pos)
 
 

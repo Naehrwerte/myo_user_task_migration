@@ -61,7 +61,16 @@ class Vec3Range:
 
         if self.max is not None and len(self.max) != 3:
             raise ValueError(f"Vec3Range.max must have length 3, got {self.max}")
-        
+
+        # Normalize to plain lists so the declared `list[float]` type holds even
+        # when constructed from tuple defaults (tyro validates this strictly).
+        if self.value is not None:
+            self.value = list(self.value)
+        if self.min is not None:
+            self.min = list(self.min)
+        if self.max is not None:
+            self.max = list(self.max)
+
     @staticmethod
     def of(value: Any) -> Vec3Range:
         if isinstance(value, Vec3Range):
