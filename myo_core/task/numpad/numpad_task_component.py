@@ -9,6 +9,7 @@ from ..task_registry import myo_register_task
 from ..universal.universal_task_component import UniversalTaskComponent
 from .numpad_task_config import NumpadTaskConfig
 from .numpad_task_logic import (
+    NumpadTargetBoxOverlay,
     NumpadTaskLogic,
     np_color_targets_by_state,
     np_phase_progress,
@@ -45,7 +46,6 @@ class NumpadTaskComponent(UniversalTaskComponent):
             mode="step",
         )
 
-
         for group in (cfg.observations.get("agent_state"), cfg.observations.get("task_state")):
             if group is not None and "phase_progress" in group.terms:
                 group.terms["phase_progress"] = ObservationTermCfg(
@@ -81,12 +81,18 @@ class NumpadTaskComponent(UniversalTaskComponent):
                 reduce="last",
             )
 
-        # Color the buttons by their sequence state (todo/current/done) while
-        # rendering. Only wired into the play config: no effect during headless
-        # training and it would otherwise force per-world geom_rgba memory.
-        if play:
+        color_mode = int(self.cfg.target_state_color_mode)
+        if play and color_mode == 1:
+            # Variant 1: recolor button geoms in the model (accurate, viewer lag).
             cfg.events["numpad_target_coloring"] = EventTermCfg(
                 func=np_color_targets_by_state,
                 params={"asset_cfg": entity_cfg},
                 mode="step",
+            )
+        elif play and color_mode == 2:
+            # Variant 2: overlay colored debug boxes (no model change, no lag).
+            cfg.events["numpad_target_box_overlay"] = EventTermCfg(
+                func=NumpadTargetBoxOverlay,
+                params={"asset_cfg": entity_cfg},
+                mode="reset",
             )

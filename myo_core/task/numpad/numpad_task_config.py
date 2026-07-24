@@ -20,6 +20,14 @@ class NumpadTaskConfig(UniversalTaskConfig):
     sequence_length: int = 4
     sample_with_replacement: bool = True
 
+    # Button state coloring (green=current, red=todo, blue=done), play mode only:
+    #   0 = off (no visual change)
+    #   1 = recolor button geoms via the model (accurate, but causes viewer lag
+    #       because every color change forces viser to rebuild its mesh handles)
+    #   2 = draw colored overlay boxes over the buttons as debug geometry
+    #       (leaves the model untouched -> no viewer lag)
+    target_state_color_mode: int = 0
+
     reward: RewardConfig = field(default_factory=lambda: RewardConfig(
         weights={
             "distance": 1,

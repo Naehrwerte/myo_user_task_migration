@@ -1,40 +1,35 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import torch
 
 from mjlab.envs import ManagerBasedRlEnv
-from mjlab.managers import EventTermCfg
+from mjlab.managers import EventTermCfg, ManagerTermBase
 from mjlab.managers.event_manager import requires_model_fields
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 from ..universal.universal_task_component import SequentialTaskLogic, TaskEntity
 
-# Buttons are colored purely by their role in the sequence (per environment):
-#   green  -> the button currently being pressed
-#   red    -> still to be pressed (has an occurrence at/after the current phase)
-#   blue   -> already done (or not part of this episode's sequence)
+if TYPE_CHECKING:
+    from mjlab.viewer.debug_visualizer import DebugVisualizer
+
 _RGBA_CURRENT = (0.0, 1.0, 0.0, 1.0)
 _RGBA_TODO = (1.0, 0.0, 0.0, 0.5)
 _RGBA_DONE = (0.0, 0.0, 1.0, 0.5)
+
+# Overlay boxes are drawn slightly larger than the button geom so their faces win
+# the depth test (no z-fighting) and fully hide the button color underneath.
+_OVERLAY_SCALE = 1.02
 
 
 class NumpadTaskLogic(SequentialTaskLogic):
     """Sequential task logic with a randomized press sequence over a fixed pool.
 
-    The universal :class:`SequentialTaskLogic` treats the target list itself as
-    the press sequence (``current_target_id`` runs ``0, 1, ... num_targets-1``).
-
-    The numpad instead keeps *all* targets as an always-shown pool and presses a
-    separately drawn sequence of ``sequence_length`` buttons. A per-environment
-    ``phase_seq`` tensor maps each sequence position (phase) to a physical target
-    index; it is resampled at every reset (with replacement by default, so digits
-    may repeat and the sequence may be longer than the pool).
-
-    Attribute contract with the universal observation/reward terms is preserved
-    (``current_target_id``, ``completed_target_count``, ``inside_target``,
-    ``distance_to_target``, ``target_size``, ``current_phase_completed``), so the
-    inherited ``_inside_target`` and most universal terms keep working. Only the
-    sequence-length/position dependent terms are overridden (see numpad component).
+    The numpad keeps *all* targets as an always-shown pool and presses a
+    separately drawn sequence of sequence_length buttons. A per-environment
+    phase_seq tensor maps each sequence position (phase) to a physical target
+    index; it is resampled at every reset
     """
 
     def __init__(self, cfg: EventTermCfg, env: ManagerBasedRlEnv):
@@ -190,26 +185,17 @@ def np_sequence_completed(
     return (asset.completed_target_count > phase_id) | currently_completing_phase
 
 
-@requires_model_fields("geom_rgba")
-def np_color_targets_by_state(
-    env: ManagerBasedRlEnv,
-    env_ids: torch.Tensor | None,
-    asset_cfg: SceneEntityCfg,
-) -> None:
-    """Color every pool button by its role in the sequence (per environment).
+def _target_state_colors(asset: TaskEntity) -> torch.Tensor:
+    """RGBA for every ``(env, button)`` following its role in the sequence.
 
-    Each physical button is painted green/red/blue depending on whether it is the
-    current target, still to be pressed, or already done — its configured color is
-    not used. A button may occur several times in the (with-replacement) sequence;
-    it counts as "todo" while it still has an occurrence at or after the current
+    Each pool button is green/red/blue depending on whether it is the current
+    target, still to be pressed, or already done — its configured color is not
+    used. A button may occur several times in the (with-replacement) sequence; it
+    counts as "todo" while it still has an occurrence at or after the current
     phase, otherwise as "done". Buttons absent from the sequence are shown as done.
 
-    Runs as a per-step event so the colors follow the randomized sequence; the
-    ``requires_model_fields`` decorator makes mjlab expand ``geom_rgba`` to
-    per-world memory so each environment can be colored independently.
+    Returns a ``[num_envs, num_targets, 4]`` float tensor.
     """
-    asset: TaskEntity = env.scene[asset_cfg.name]
-
     device = asset.phase_seq.device
     num_envs = asset.phase_seq.shape[0]
     num_targets = asset.num_targets
@@ -234,5 +220,64 @@ def np_color_targets_by_state(
     colors = done.expand(num_envs, num_targets, 4).clone()      # default: done/inactive
     colors[is_todo] = todo
     colors[is_current] = current                                # highest priority
+    return colors
 
-    env.sim.model.geom_rgba[:, asset.target_size_ids, :] = colors
+
+@requires_model_fields("geom_rgba")
+def np_color_targets_by_state(
+    env: ManagerBasedRlEnv,
+    env_ids: torch.Tensor | None,
+    asset_cfg: SceneEntityCfg,
+) -> None:
+    """Coloring variant 1: recolor the button geoms in the model (per environment).
+
+    Runs as a per-step event so the colors follow the randomized sequence; the
+    ``requires_model_fields`` decorator makes mjlab expand ``geom_rgba`` to
+    per-world memory so each environment can be colored independently.
+
+    Downside: writing ``geom_rgba`` changes the viewer's appearance fingerprint,
+    which forces viser to rebuild its mesh handles every time a color changes ->
+    noticeable viewer lag. Use :class:`NumpadTargetBoxOverlay` (variant 2) to
+    avoid touching the model.
+    """
+    asset: TaskEntity = env.scene[asset_cfg.name]
+    env.sim.model.geom_rgba[:, asset.target_size_ids, :] = _target_state_colors(asset)
+
+
+class NumpadTargetBoxOverlay(ManagerTermBase):
+    """Coloring variant 2: draw a colored box over each button as debug geometry.
+    """
+
+    def __init__(self, cfg: EventTermCfg, env: ManagerBasedRlEnv):
+        super().__init__(env)
+        asset_cfg: SceneEntityCfg = cfg.params["asset_cfg"]
+        self.asset: TaskEntity = env.scene[asset_cfg.name]
+
+    def __call__(self, env: ManagerBasedRlEnv, env_ids: None, asset_cfg: SceneEntityCfg) -> None:
+        # Visualization-only term; all work happens in debug_vis().
+        del env, env_ids, asset_cfg
+
+    def debug_vis(self, visualizer: "DebugVisualizer") -> None:
+        asset = self.asset
+        geom_ids = asset.target_size_ids                        # [P]
+        colors = _target_state_colors(asset)                    # [E, P, 4]
+
+        raw = asset.data.data                                   # batched sim data
+        geom_size = asset.data.model.geom_size                  # [E, ngeom, 3]
+
+        for env_idx in visualizer.get_env_indices(asset.phase_seq.shape[0]):
+            centers = raw.geom_xpos[env_idx][geom_ids]          # [P, 3]
+            mats = raw.geom_xmat[env_idx][geom_ids]             # [P, 3, 3] / [P, 9]
+            sizes = geom_size[env_idx][geom_ids] * _OVERLAY_SCALE  # half-extents
+            env_colors = colors[env_idx]                        # [P, 4]
+
+            for i in range(geom_ids.shape[0]):
+                r, g, b = env_colors[i, :3].tolist()
+                # Force full opacity so the button color underneath is hidden;
+                # viser applies one shared opacity to all queued boxes anyway.
+                visualizer.add_box(
+                    center=centers[i],
+                    size=sizes[i],
+                    mat=mats[i],
+                    color=(r, g, b, 1.0),
+                )
