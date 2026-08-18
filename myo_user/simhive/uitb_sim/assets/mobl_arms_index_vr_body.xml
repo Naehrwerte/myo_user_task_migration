@@ -394,7 +394,7 @@
                           <site name="APL-P9" pos="0.03076 -0.01583 -0.01885"/>
                           <site name="APL-P6" pos="0.0332244 0.00608975 -0.00870125"/>
                           <geom name="controller-right" type="mesh" mesh="controller-right"
-                                pos="0.005 -0.025 -0.025" quat="0.766 0.643 0 0"
+                                pos="0.017 -0.0712 0.0129" quat="0.5209 0.8384 -0.09 -0.1333"
                                 mass="0.129" rgba="0.24 0.24 0.24 1.0"
                                 contype="0" conaffinity="0"/>
 

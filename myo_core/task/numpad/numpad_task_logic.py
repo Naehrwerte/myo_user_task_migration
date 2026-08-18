@@ -17,9 +17,6 @@ if TYPE_CHECKING:
 _RGBA_CURRENT = (0.0, 1.0, 0.0, 1.0)
 _RGBA_TODO = (1.0, 0.0, 0.0, 0.5)
 _RGBA_DONE = (0.0, 0.0, 1.0, 0.5)
-
-# Overlay boxes are drawn slightly larger than the button geom so their faces win
-# the depth test (no z-fighting) and fully hide the button color underneath.
 _OVERLAY_SCALE = 1.02
 
 
@@ -186,15 +183,12 @@ def np_sequence_completed(
 
 
 def _target_state_colors(asset: TaskEntity) -> torch.Tensor:
-    """RGBA for every ``(env, button)`` following its role in the sequence.
-
+    """
     Each pool button is green/red/blue depending on whether it is the current
     target, still to be pressed, or already done — its configured color is not
     used. A button may occur several times in the (with-replacement) sequence; it
     counts as "todo" while it still has an occurrence at or after the current
     phase, otherwise as "done". Buttons absent from the sequence are shown as done.
-
-    Returns a ``[num_envs, num_targets, 4]`` float tensor.
     """
     device = asset.phase_seq.device
     num_envs = asset.phase_seq.shape[0]
@@ -230,10 +224,6 @@ def np_color_targets_by_state(
     asset_cfg: SceneEntityCfg,
 ) -> None:
     """Coloring variant 1: recolor the button geoms in the model (per environment).
-
-    Runs as a per-step event so the colors follow the randomized sequence; the
-    ``requires_model_fields`` decorator makes mjlab expand ``geom_rgba`` to
-    per-world memory so each environment can be colored independently.
 
     Downside: writing ``geom_rgba`` changes the viewer's appearance fingerprint,
     which forces viser to rebuild its mesh handles every time a color changes ->
@@ -273,8 +263,6 @@ class NumpadTargetBoxOverlay(ManagerTermBase):
 
             for i in range(geom_ids.shape[0]):
                 r, g, b = env_colors[i, :3].tolist()
-                # Force full opacity so the button color underneath is hidden;
-                # viser applies one shared opacity to all queued boxes anyway.
                 visualizer.add_box(
                     center=centers[i],
                     size=sizes[i],
