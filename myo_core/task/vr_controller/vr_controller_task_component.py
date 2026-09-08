@@ -280,9 +280,16 @@ class SequentialTaskLogic(ManagerTermBase):
         v = target_position - ray_origin
         proj = (v * ray_dir).sum(dim=-1)
         perp_vec = v - proj[:, None] * ray_dir
-        distance_to_target = torch.linalg.vector_norm(perp_vec, dim=-1)
+        perp_distance = torch.linalg.vector_norm(perp_vec, dim=-1)
 
-        inside_target = (distance_to_target < target_radius) & (proj > 0.0)
+        pointing_forward = proj > 0.0
+        inside_target = (perp_distance < target_radius) & pointing_forward
+
+        distance_to_target = torch.where(
+            pointing_forward,
+            perp_distance,
+            torch.linalg.vector_norm(v, dim=-1),
+        )
 
         return inside_target, distance_to_target, target_radius
 

@@ -399,12 +399,12 @@
                                 contype="0" conaffinity="0"/>
 
                           <geom name="ray-indicator" type="capsule"
-                                fromto="0.01 -0.03 -0.015  0.01 -0.53 -0.015"
+                                fromto="0.01 -0.03 -0.015  0.01 -1.23 -0.015"
                                 size="0.003" rgba="1 0 0 0.85"
                                 contype="0" conaffinity="0" density="0"/>
 
                           <site name="ray_origin" pos="0.01 -0.03 -0.015" size="0.005" rgba="0 0 0 0"/>
-                          <site name="ray_end"    pos="0.01 -0.53 -0.015" size="0.005" rgba="0 0 0 0"/>
+                          <site name="ray_end"    pos="0.01 -1.23 -0.015" size="0.005" rgba="0 0 0 0"/>
                           <body name="index0">
                             <inertial pos="0 0 0" mass="0.001" diaginertia="0.001 0.001 0.001"/>
                             <geom name="sdfast_1seg_hand_fr_c_2mc" type="mesh" mesh="sdfast_1seg_hand_fr_c_2mc"/>
