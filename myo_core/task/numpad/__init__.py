@@ -1,2 +1,5 @@
+from myo_core.common.sequential_task import register_target_resolver
 from .numpad_task_config import NumpadTaskConfig
 from .numpad_task_component import NumpadTaskComponent
+
+register_target_resolver()

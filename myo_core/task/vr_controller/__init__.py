@@ -1,3 +1,5 @@
-from .vr_controller_task_config_resolver import register_target_resolver
+from myo_core.common.sequential_task import register_target_resolver
 from .vr_controller_task_config import VrControllerTaskConfig
 from .vr_controller_task_component import VrControllerTaskComponent
+
+register_target_resolver()

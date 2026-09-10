@@ -1,3 +1,5 @@
+# Vr_controller task: pointing task with infinite length ray
+
 defaults:
   - _self_
 
@@ -9,7 +11,7 @@ agent_state_keys:
   - ray_origin
   - ray_dir
 targets:
-  - _target_: ${target:pointing}
+  - _target_: ${task_target:pointing}
     position:
       min: [ 0.55, -0.15, -0.35 ]
       max: [ 0.85, 0.15, -0.25 ]
