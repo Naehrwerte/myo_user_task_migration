@@ -12,7 +12,7 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.managers import EventTermCfg, ManagerTermBase
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
-from .sequential_task_config import ButtonTargetConfig
+from .sequential_task_config import BUTTON_HOUSING_PARTS, ButtonTargetConfig
 from .sequential_task_entity import TaskEntity
 
 
@@ -82,6 +82,21 @@ class SequentialTaskLogic(ManagerTermBase):
             joint = env.sim.mj_model.joint(f"{self.entity_name}/joint_button_{target_id}")
             joint_adr.append(int(joint.qposadr[0]))
         asset.target_button_qpos_adr = torch.tensor(joint_adr, dtype=torch.long, device=env.device)
+
+        # Visible geoms of every target (global ids), for coloring: the target geom
+        # itself, or the housing frame parts of pressable buttons. Flattened, with the
+        # target each geom belongs to.
+        target_visual_geom_ids, target_visual_geom_target = [], []
+        for target_id, button in enumerate(is_button):
+            if button and press_cfg.enabled:
+                names = [f"geom_housing_{target_id}_{k}" for k in range(BUTTON_HOUSING_PARTS)]
+            else:
+                names = [f"geom_target_{target_id}"]
+            for name in names:
+                target_visual_geom_ids.append(env.sim.mj_model.geom(f"{self.entity_name}/{name}").id)
+                target_visual_geom_target.append(target_id)
+        asset.target_visual_geom_ids = torch.tensor(target_visual_geom_ids, dtype=torch.long, device=env.device)
+        asset.target_visual_geom_target = torch.tensor(target_visual_geom_target, dtype=torch.long, device=env.device)
 
         asset.button_require_release = press_cfg.require_release
         asset.button_needs_release = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)

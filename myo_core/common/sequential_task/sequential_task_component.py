@@ -24,12 +24,15 @@ import numpy as np
 import myo_core.common as myo
 from . import sequential_task_mdp as mdp
 from .sequential_task_config import (
+    BUTTON_HOUSING_PARTS,
     ButtonTargetConfig,
+    Color_mode,
     PointingTargetConfig,
     SequentialTaskConfig,
 )
 from .sequential_task_entity import TargetDomainRandomization, TaskEntityCfg
 from .sequential_task_logic import SequentialTaskLogic
+from .target_coloring import TargetStateOverlay, color_targets_by_state
 
 
 class SequentialTaskComponent(myo.MyoComponent):
@@ -81,7 +84,7 @@ class SequentialTaskComponent(myo.MyoComponent):
 
         cfg.scene.entities.update({
             entity_name: TaskEntityCfg(
-                spec_fn=lambda: self._create_model()[0],
+                spec_fn=lambda: self._create_model(play)[0],
                 articulation=EntityArticulationInfoCfg(
                     actuators=(
                         XmlActuatorCfg(
@@ -250,8 +253,23 @@ class SequentialTaskComponent(myo.MyoComponent):
             ),
         })
 
+        color_mode = self.cfg.target_state_color_mode
+        if play and color_mode == Color_mode.RECOLOR:
+            # Variant 1: recolor target geoms in the model (results in viewer lag because of reloading model).
+            cfg.events["target_state_coloring"] = EventTermCfg(
+                func=color_targets_by_state,
+                params={"asset_cfg": entity_cfg},
+                mode="step",
+            )
+        elif play and color_mode == Color_mode.OVERLAY:
+            # Variant 2: overlay colored debug geometry (no model change, no lag).
+            cfg.events["target_state_overlay"] = EventTermCfg(
+                func=TargetStateOverlay,
+                params={"asset_cfg": entity_cfg},
+                mode="reset",
+            )
 
-    def _create_model(self) -> tuple[mujoco.MjSpec, TargetDomainRandomization, myo.MyoModelNames]:
+    def _create_model(self, play: bool = False) -> tuple[mujoco.MjSpec, TargetDomainRandomization, myo.MyoModelNames]:
         spec = mujoco.MjSpec.from_file(self.cfg.model_path)
 
         model = spec.compile()
@@ -266,6 +284,9 @@ class SequentialTaskComponent(myo.MyoComponent):
         target_origin = data.site_xpos[reference_site] + np.array(self.cfg.reach.reference_offset)
 
         spec, dr = self._modify_spec(spec, target_origin)
+
+        if play and self.cfg.show_button_labels:
+            self._add_button_labels(spec)
 
         return spec, dr, model_names
 
@@ -381,6 +402,27 @@ class SequentialTaskComponent(myo.MyoComponent):
 
         geom_rgba = self._resolve_rgba(dr, target_geom_name, target.rgb)
 
+        # Touch-sensing zone sitting on the button surface.
+        site_pos = np.array(target.site_pos.value[:3]) if target.site_pos.value is not None else np.zeros(3)
+        site_size = np.array(target.site_size.value[:3]) if target.site_size.value is not None else geom_size
+
+        if self.cfg.button_press.enabled:
+            # geom_target_i stays as invisible, non-colliding reference box, so target
+            # position (body COM) and target size observations are unchanged; the
+            # visible, colliding housing is a frame around the cap.
+            target_body.add_geom(
+                name=target_geom_name,
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                size=geom_size,
+                rgba=[*geom_rgba[:3], 0.0],
+                contype=0,
+                conaffinity=0,
+                group=3,
+            )
+            self._add_button_housing(target_body, target_id, target, site_size, geom_rgba)
+            self._add_button_cap(spec, target_body, target_id, target, site_size)
+            return
+
         # Collidable box the fingertip physically pushes against.
         target_body.add_geom(
             name=target_geom_name,
@@ -392,14 +434,6 @@ class SequentialTaskComponent(myo.MyoComponent):
             contype=1,
             conaffinity=1,
         )
-
-        # Touch-sensing zone sitting on the button surface.
-        site_pos = np.array(target.site_pos.value[:3]) if target.site_pos.value is not None else np.zeros(3)
-        site_size = np.array(target.site_size.value[:3]) if target.site_size.value is not None else geom_size
-
-        if self.cfg.button_press.enabled:
-            self._add_button_cap(spec, target_body, target_id, target, site_size)
-            return
 
         target_body.add_site(
             name=target_site_name,
@@ -414,6 +448,54 @@ class SequentialTaskComponent(myo.MyoComponent):
             objname=target_site_name,
         )
 
+    _HOUSING_PLATE_HALF_THICKNESS = 0.001
+
+    @staticmethod
+    def _housing_half(target: ButtonTargetConfig) -> list[float]:
+        # With randomized sizes use the largest one so the cap always fits.
+        size = target.size
+        return list(size.value if size.value is not None else size.max)
+
+    def _add_button_housing(
+        self,
+        target_body: mujoco.MjsBody,
+        target_id: int,
+        target: ButtonTargetConfig,
+        cap_size: np.ndarray,
+        rgba: np.ndarray,
+    ) -> None:
+        """Housing frame: back plate plus four walls around a hole the cap moves through."""
+        hx, hy, hz = self._housing_half(target)
+        ox = cap_size[0] + self.cfg.button_press.hole_clearance
+        oy = cap_size[1] + self.cfg.button_press.hole_clearance
+        p = self._HOUSING_PLATE_HALF_THICKNESS
+        if ox >= hx or oy >= hy:
+            raise ValueError(
+                f"Button {target_id}: cap ({cap_size[:2]}) plus hole clearance does not fit "
+                f"into the housing ({hx}, {hy})"
+            )
+
+        parts = [  # (pos, half extents) in the button frame
+            ([0.0, 0.0, -hz + p], [hx, hy, p]),
+            ([(hx + ox) / 2, 0.0, 0.0], [(hx - ox) / 2, hy, hz]),
+            ([-(hx + ox) / 2, 0.0, 0.0], [(hx - ox) / 2, hy, hz]),
+            ([0.0, (hy + oy) / 2, 0.0], [ox, (hy - oy) / 2, hz]),
+            ([0.0, -(hy + oy) / 2, 0.0], [ox, (hy - oy) / 2, hz]),
+        ]
+        assert len(parts) == BUTTON_HOUSING_PARTS
+        for k, (pos, half) in enumerate(parts):
+            target_body.add_geom(
+                name=f"geom_housing_{target_id}_{k}",
+                type=mujoco.mjtGeom.mjGEOM_BOX,
+                pos=pos,
+                size=half,
+                rgba=rgba,
+                margin=target.geom_margin,
+                contype=1,
+                conaffinity=1,
+                density=0.0,  # the reference box carries the mass (keeps the body COM)
+            )
+
     def _add_button_cap(
         self,
         spec: mujoco.MjSpec,
@@ -426,14 +508,24 @@ class SequentialTaskComponent(myo.MyoComponent):
         """
         press = self.cfg.button_press
 
-        # Housing half-height; with randomized sizes use the largest one so the cap
-        # never intersects the housing.
-        size = target.size
-        housing_half_height = size.value[2] if size.value is not None else size.max[2]
+        housing_top = self._housing_half(target)[2]
+        cap_top_rest = housing_top + press.pressed_protrusion + press.travel
+        cap_bottom_rest = cap_top_rest - 2 * press.cap_half_height
+        cap_bottom_pressed = cap_bottom_rest - press.travel
+        if cap_bottom_rest >= housing_top:
+            raise ValueError(
+                "button_press.cap_half_height too small: the cap has to reach into the "
+                f"housing at rest (2 * cap_half_height > travel + pressed_protrusion)"
+            )
+        if cap_bottom_pressed <= -housing_top + 2 * self._HOUSING_PLATE_HALF_THICKNESS:
+            raise ValueError(
+                "button_press.cap_half_height too large: the pressed cap would reach "
+                "through the back plate of the housing"
+            )
 
         cap_body = target_body.add_body(
             name=f"body_button_cap_{target_id}",
-            pos=[0.0, 0.0, housing_half_height + press.travel + press.cap_half_height],
+            pos=[0.0, 0.0, cap_top_rest - press.cap_half_height],
         )
         cap_body.add_joint(
             name=f"joint_button_{target_id}",
@@ -468,6 +560,9 @@ class SequentialTaskComponent(myo.MyoComponent):
             type=mujoco.mjtGeom.mjGEOM_BOX,
             size=[e + 0.002 for e in half_extents],
             rgba=[0.0, 0.0, 0.0, 0.0],
+            # viser draws every site opaque (fully transparent ones in grey), which would
+            # cover the cap; group 3 is hidden by default in viser and MuJoCo.
+            group=3,
         )
         spec.add_sensor(
             name=f"sensor_target_{target_id}",
@@ -475,3 +570,71 @@ class SequentialTaskComponent(myo.MyoComponent):
             objtype=mujoco.mjtObj.mjOBJ_SITE,
             objname=site_name,
         )
+
+    # Seven-segment layout: segment -> (center_u, center_v, horizontal) in units of
+    # (digit width, digit height), u pointing right and v up.
+    _SEGMENTS = {
+        "a": (0.0, 0.5, True), "b": (0.5, 0.25, False), "c": (0.5, -0.25, False),
+        "d": (0.0, -0.5, True), "e": (-0.5, -0.25, False), "f": (-0.5, 0.25, False),
+        "g": (0.0, 0.0, True),
+    }
+    _DIGIT_SEGMENTS = {
+        "0": "abcdef", "1": "bc", "2": "abdeg", "3": "abcdg", "4": "bcfg",
+        "5": "acdfg", "6": "acdefg", "7": "abc", "8": "abcdefg", "9": "abcdfg",
+    }
+
+    def _add_button_labels(self, spec: mujoco.MjSpec) -> None:
+        """Draw every button ``label`` as non-colliding seven-segment boxes on its surface.
+        """
+        press = self.cfg.button_press
+        # spec.body() misses bodies added after the spec was compiled once (see _create_model).
+        bodies = {b.name: b for b in spec.bodies}
+
+        for target_id, target in enumerate(self.cfg.targets):
+            if not isinstance(target, ButtonTargetConfig) or not target.label:
+                continue
+
+            size = target.size
+            housing_half = size.value if size.value is not None else size.min
+            # Cap and touch site both use site_size, see _add_button_target.
+            surface_half = target.site_size.value or housing_half
+            if press.enabled:
+                body = bodies[f"body_button_cap_{target_id}"]
+                center = [0.0, 0.0]
+                surface_z = press.cap_half_height
+            else:
+                body = bodies[f"body_target_{target_id}"]
+                site_pos = target.site_pos.value or [0.0, 0.0, 0.0]
+                center = site_pos[:2]
+                surface_z = site_pos[2] + surface_half[2]
+
+            # Digit geometry relative to the (smaller) surface side.
+            height = 1.2 * min(surface_half[0], surface_half[1])
+            width = 0.55 * height
+            stroke = 0.12 * height
+            gap = 0.35 * width
+            n = len(target.label)
+            label_width = n * width + (n - 1) * gap
+            # Thin raised legend, starting slightly inside the surface.
+            raise_ = 0.0008
+            half_thickness = (raise_ + 0.0005) / 2
+            z = surface_z + raise_ - half_thickness
+
+            for char_idx, char in enumerate(target.label):
+                u0 = -label_width / 2 + width / 2 + char_idx * (width + gap)
+                for seg in self._DIGIT_SEGMENTS[char]:
+                    cu, cv, horizontal = self._SEGMENTS[seg]
+                    u, v = u0 + cu * width, cv * height
+                    half_u = (width + stroke) / 2 if horizontal else stroke / 2
+                    half_v = stroke / 2 if horizontal else (height / 2 + stroke) / 2
+                    # Surface frame: up = local +x, right = local -y.
+                    body.add_geom(
+                        name=f"geom_label_{target_id}_{char_idx}{seg}",
+                        type=mujoco.mjtGeom.mjGEOM_BOX,
+                        pos=[center[0] + v, center[1] - u, z],
+                        size=[half_v, half_u, half_thickness],
+                        rgba=[0.05, 0.05, 0.05, 1.0],
+                        contype=0,
+                        conaffinity=0,
+                        density=0.0,
+                    )

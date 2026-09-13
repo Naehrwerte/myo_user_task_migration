@@ -1,12 +1,6 @@
 from dataclasses import dataclass, field
-from enum import Enum
 
-from myo_core.common.sequential_task import RewardConfig, SequentialTaskConfig
-
-class Color_mode(Enum):
-    OFF = 0
-    RECOLOR = 1
-    OVERLAY = 2
+from myo_core.common.sequential_task import Color_mode, RewardConfig, SequentialTaskConfig
 
 @dataclass
 class NumpadTaskConfig(SequentialTaskConfig):

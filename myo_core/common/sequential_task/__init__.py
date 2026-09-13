@@ -2,6 +2,7 @@ from .target_resolver import register_target_resolver
 
 from .sequential_task_config import (
     ButtonPressConfig,
+    Color_mode,
     ButtonTargetConfig,
     DistractorConfig,
     PointingTargetConfig,

@@ -25,12 +25,14 @@ reward:
 targets:
   # Button 0 (bottom row)
   - _target_: ${task_target:button}
+    label: "0"
     position:
       value: [0.30, -0.06, -0.36]
     rgb:
       value: [0.2, 0.2, 0.2]
 
   - _target_: ${task_target:button}
+    label: "1"
     position:
       value: [0.35, -0.06, -0.28]
     rgb:
@@ -38,6 +40,7 @@ targets:
 
 
   - _target_: ${task_target:button}
+    label: "2"
     position:
       value: [0.35, -0.12, -0.28]
     rgb:
@@ -45,6 +48,7 @@ targets:
 
 
   - _target_: ${task_target:button}
+    label: "3"
     position:
       value: [0.35, -0.18, -0.28]
     rgb:
@@ -52,6 +56,7 @@ targets:
 
 
   - _target_: ${task_target:button}
+    label: "4"
     position:
       value: [0.40, -0.06, -0.20]
     rgb:
@@ -59,6 +64,7 @@ targets:
 
   # Button "5" (center)
   - _target_: ${task_target:button}
+    label: "5"
     position:
       value: [0.40, -0.12, -0.20]
     rgb:
@@ -66,6 +72,7 @@ targets:
 
 
   - _target_: ${task_target:button}
+    label: "6"
     position:
       value: [0.40, -0.18, -0.20]
     rgb:
@@ -73,6 +80,7 @@ targets:
 
   # Button "7" (top-left)
   - _target_: ${task_target:button}
+    label: "7"
     position:
       value: [0.45, -0.06, -0.12]
     rgb:
@@ -80,6 +88,7 @@ targets:
 
 
   - _target_: ${task_target:button}
+    label: "8"
     position:
       value: [0.45, -0.12, -0.12]
     rgb:
@@ -87,6 +96,7 @@ targets:
 
 
   - _target_: ${task_target:button}
+    label: "9"
     position:
       value: [0.45, -0.18, -0.12]
     rgb:

@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List
 
+from myo_core.common.sequential_task import Color_mode
 from myo_core.common.sequential_task import ReachConfig as SequentialReachConfig
 from myo_core.common.sequential_task import SequentialTaskConfig
 
@@ -33,6 +34,7 @@ class VrControllerConfig:
 @dataclass
 class VrControllerTaskConfig(SequentialTaskConfig):
     model_path: str = "myo_user/envs/myo/assets/arm/mobl_arms_index_vr_myouser.xml"
+    target_state_color_mode: Color_mode = Color_mode.OVERLAY
 
     reach: ReachConfig = field(default_factory=ReachConfig)
     vr_controller: VrControllerConfig = field(default_factory=VrControllerConfig)

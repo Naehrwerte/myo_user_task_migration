@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Literal
 
 from hydra.utils import instantiate
@@ -9,6 +10,11 @@ from myo_core.task.task_config import TaskConfig
 
 ShapeType = Literal["sphere", "box"]
 
+
+class Color_mode(Enum):
+    OFF = 0
+    RECOLOR = 1
+    OVERLAY = 2
 
 @dataclass
 class ReachConfig:
@@ -63,36 +69,41 @@ class ButtonTargetConfig(TargetConfig):
     min_touch_force: float = 1.0
     dwell_duration: float = 0.0
 
+    # Digits drawn on the button surface as seven-segment display (visual only, play
+    # mode only). Reading direction on the surface: up = local +x, right = local -y.
+    label: str | None = None
+
     def __post_init__(self) -> None:
         super().__post_init__()
+        if self.label is not None:
+            self.label = str(self.label)
+            if not self.label.isdigit():
+                raise ValueError(f"Button label must consist of digits, got {self.label!r}")
         self.size = Vec3Range.of(self.size)
         self.site_size = Vec3Range.of(self.site_size)
         self.site_pos = Vec3Range.of(self.site_pos)
 
 
+# Geoms the housing of a pressable button consists of (back plate + 4 walls),
+# named geom_housing_{target_id}_{k}.
+BUTTON_HOUSING_PARTS = 5
+
+
 @dataclass
 class ButtonPressConfig:
-    """Physically pressable buttons.
-
-    When enabled, every button target gets a movable cap (its xy half-extents are
-    taken from ``site_size``) on a spring-loaded slide joint along the button
-    normal. The button activates once the cap is pushed in by at least
-    ``activation_depth`` instead of on touch force. All lengths are in meters.
-    """
 
     enabled: bool = False
     travel: float = 0.008              # maximum press depth (joint range)
     activation_depth: float = 0.006    # press depth at which the button activates
-    cap_half_height: float = 0.004
+    cap_half_height: float = 0.008     # the cap reaches into the hole even at rest
+    pressed_protrusion: float = 0.001  # cap top above the housing when fully pressed
+    hole_clearance: float = 0.0005     # gap between cap and hole wall (per side)
     cap_mass: float = 0.01
     cap_rgb: Vec3 = field(default_factory=lambda: [0.6, 0.6, 0.6])
     stiffness: float = 150.0           # spring stiffness [N/m]
     preload: float = 0.002             # spring rest offset above the top stop, keeps the cap seated
     damping: float = 3.0               # [N s/m]
 
-    # Independent of ``enabled`` (works for touch and press activation): a completed
-    # button has to be released before it can activate again, e.g. when the same
-    # button occurs twice in a row in the sequence.
     require_release: bool = False
 
     def __post_init__(self) -> None:
@@ -138,6 +149,8 @@ class SequentialTaskConfig(TaskConfig):
 
     reach: ReachConfig = field(default_factory=ReachConfig)
     button_press: ButtonPressConfig = field(default_factory=ButtonPressConfig)
+    show_button_labels: bool = True
+    target_state_color_mode: Color_mode = Color_mode.OFF
     distractor: DistractorConfig = field(default_factory=DistractorConfig)
     sequence: SequenceConfig = field(default_factory=SequenceConfig)
     reward: RewardConfig = field(default_factory=RewardConfig)

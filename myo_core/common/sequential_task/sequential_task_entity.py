@@ -1,10 +1,4 @@
 """Scene entity shared by every sequential task.
-
-Copy of the universal task entity, extended with the *phase* indirection: a
-phase is a step of the sequence to complete, ``phase_targets`` maps it to the
-physical target that has to be reached in that phase. For a plain sequential
-task that mapping is the identity (phase i == target i); the numpad draws a
-random mapping at every reset.
 """
 
 from __future__ import annotations
@@ -47,6 +41,10 @@ class TaskEntity(Entity):
     target_is_button: torch.Tensor               # [num_targets], bool
     target_min_touch_force: torch.Tensor         # [num_targets], float
     target_sensor_adr: torch.Tensor              # [num_targets], long (-1 for non-buttons)
+
+    # visible target geoms, for progress coloring
+    target_visual_geom_ids: torch.Tensor         # [num_visual_geoms], long (global geom ids)
+    target_visual_geom_target: torch.Tensor      # [num_visual_geoms], long (target id)
 
     # pressable buttons (press-depth-based completion, see ButtonPressConfig)
     button_press_enabled: bool
