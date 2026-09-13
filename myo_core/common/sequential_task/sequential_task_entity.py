@@ -48,6 +48,14 @@ class TaskEntity(Entity):
     target_min_touch_force: torch.Tensor         # [num_targets], float
     target_sensor_adr: torch.Tensor              # [num_targets], long (-1 for non-buttons)
 
+    # pressable buttons (press-depth-based completion, see ButtonPressConfig)
+    button_press_enabled: bool
+    button_activation_depth: float
+    button_travel: float
+    target_button_qpos_adr: torch.Tensor         # [num_targets], long (-1 if not pressable)
+    button_require_release: bool
+    button_needs_release: torch.Tensor           # [num_envs], bool (completed button still held)
+
     # int tensors
     completed_target_count: torch.Tensor         # [num_envs], int
     steps_inside_target: torch.Tensor            # [num_envs], int

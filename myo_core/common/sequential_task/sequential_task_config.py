@@ -71,6 +71,41 @@ class ButtonTargetConfig(TargetConfig):
 
 
 @dataclass
+class ButtonPressConfig:
+    """Physically pressable buttons.
+
+    When enabled, every button target gets a movable cap (its xy half-extents are
+    taken from ``site_size``) on a spring-loaded slide joint along the button
+    normal. The button activates once the cap is pushed in by at least
+    ``activation_depth`` instead of on touch force. All lengths are in meters.
+    """
+
+    enabled: bool = False
+    travel: float = 0.008              # maximum press depth (joint range)
+    activation_depth: float = 0.006    # press depth at which the button activates
+    cap_half_height: float = 0.004
+    cap_mass: float = 0.01
+    cap_rgb: Vec3 = field(default_factory=lambda: [0.6, 0.6, 0.6])
+    stiffness: float = 150.0           # spring stiffness [N/m]
+    preload: float = 0.002             # spring rest offset above the top stop, keeps the cap seated
+    damping: float = 3.0               # [N s/m]
+
+    # Independent of ``enabled`` (works for touch and press activation): a completed
+    # button has to be released before it can activate again, e.g. when the same
+    # button occurs twice in a row in the sequence.
+    require_release: bool = False
+
+    def __post_init__(self) -> None:
+        if self.travel <= 0.0:
+            raise ValueError(f"button_press.travel must be > 0, got {self.travel}")
+        if not 0.0 < self.activation_depth <= self.travel:
+            raise ValueError(
+                "button_press.activation_depth must be in (0, travel], "
+                f"got {self.activation_depth} (travel={self.travel})"
+            )
+
+
+@dataclass
 class DistractorConfig:
     count: int = 0
     similar_color_prob: float = 0.5
@@ -102,6 +137,7 @@ class SequentialTaskConfig(TaskConfig):
     targets: list[Any] = field(default_factory=list)
 
     reach: ReachConfig = field(default_factory=ReachConfig)
+    button_press: ButtonPressConfig = field(default_factory=ButtonPressConfig)
     distractor: DistractorConfig = field(default_factory=DistractorConfig)
     sequence: SequenceConfig = field(default_factory=SequenceConfig)
     reward: RewardConfig = field(default_factory=RewardConfig)

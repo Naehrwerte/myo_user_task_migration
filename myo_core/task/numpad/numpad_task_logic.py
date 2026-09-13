@@ -112,7 +112,10 @@ class NumpadTargetBoxOverlay(ManagerTermBase):
     def __call__(self, env: ManagerBasedRlEnv, env_ids: None, asset_cfg: SceneEntityCfg) -> None:
         del env, env_ids, asset_cfg
 
-    def generate_new_boxes_as_overlay(self, visualizer: "DebugVisualizer") -> None:
+    def debug_vis(self, visualizer: "DebugVisualizer") -> None:
+        """Called by mjlab's EventManager, which looks up class-based event terms by
+        the method name ``debug_vis`` -- do not rename even if its a sub-optimal description of its purpose.
+        """
         asset = self.asset
         geom_ids = asset.target_size_ids                        # [P]
         colors = _target_state_colors(asset)                    # [E, P, 4]

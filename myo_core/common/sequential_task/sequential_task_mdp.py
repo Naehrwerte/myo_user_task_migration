@@ -9,6 +9,7 @@ from mjlab.envs import ManagerBasedRlEnv
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 
 from .sequential_task_entity import TaskEntity
+from .sequential_task_logic import current_button_depth
 
 
 def target_pos(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
@@ -46,6 +47,12 @@ def dwell_fraction(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> torch.T
     )
 
     return fraction[:, None]
+
+
+def button_press_fraction(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+    asset: TaskEntity = env.scene[asset_cfg.name]
+
+    return (current_button_depth(asset) / asset.button_travel)[:, None]
 
 
 def sequential_distance_reward(

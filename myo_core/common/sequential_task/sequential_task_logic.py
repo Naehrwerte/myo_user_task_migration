@@ -1,9 +1,5 @@
-"""Task logic shared by every sequential task.
-
-Self-contained copy of the universal task logic. It is written in terms of
-*phases* instead of raw target indices so that a subclass only has to say how
-many phases there are and which target belongs to a phase (see
-``_resolve_num_phases`` / ``_sample_phase_targets``).
+"""
+Task logic shared by every sequential task.
 """
 
 from __future__ import annotations
@@ -73,6 +69,23 @@ class SequentialTaskLogic(ManagerTermBase):
             sensor_adr.append(int(sensor.adr[0]))
         asset.target_sensor_adr = torch.tensor(sensor_adr, dtype=torch.long, device=env.device)
 
+        # Pressable buttons: qpos address of every cap slide joint (-1 for non-buttons).
+        press_cfg = asset.task_cfg.button_press
+        asset.button_press_enabled = press_cfg.enabled
+        asset.button_activation_depth = press_cfg.activation_depth
+        asset.button_travel = press_cfg.travel
+        joint_adr = []
+        for target_id, button in enumerate(is_button):
+            if not (button and press_cfg.enabled):
+                joint_adr.append(-1)
+                continue
+            joint = env.sim.mj_model.joint(f"{self.entity_name}/joint_button_{target_id}")
+            joint_adr.append(int(joint.qposadr[0]))
+        asset.target_button_qpos_adr = torch.tensor(joint_adr, dtype=torch.long, device=env.device)
+
+        asset.button_require_release = press_cfg.require_release
+        asset.button_needs_release = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
         asset.target_pos = asset.data.body_com_pos_w[asset.env_ids[:, None], asset.target_pos_ids]
         asset.inside_target, asset.distance_to_target, asset.target_size = self._inside_target()
         asset.remaining_target_distances = torch.zeros(
@@ -81,29 +94,15 @@ class SequentialTaskLogic(ManagerTermBase):
 
         asset.current_phase_completed = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
 
-    # Sequence definition -----------------------------------------------------
-
     def _resolve_site_ids(self, asset: TaskEntity, asset_cfg: SceneEntityCfg) -> None:
-        """Cache the site ids the completion criterion needs on the entity.
-
-        Site ids follow the order of ``SequentialTaskComponent._site_names()``.
-        """
         asset.end_effector_site_id = asset_cfg.site_ids[0]
 
     def _resolve_num_phases(self, asset: TaskEntity) -> int:
-        """Number of targets that have to be completed per episode."""
         return asset.num_targets
 
     def _sample_phase_targets(self, asset: TaskEntity, env_ids: torch.Tensor) -> torch.Tensor:
-        """Target index for every phase, as [len(env_ids), num_phases].
-
-        The plain sequential task walks the target list in order, so the mapping
-        is the identity and is the same for every environment.
-        """
         phases = torch.arange(asset.num_phases, dtype=torch.long, device=self._device)
         return phases[None, :].expand(env_ids.shape[0], asset.num_phases)
-
-    # Manager term ------------------------------------------------------------
 
     def reset(self, env_ids: torch.Tensor | None) -> None:
         "Note: This is run once before first initial step and always after every reset event is done by mjlab"
@@ -116,6 +115,7 @@ class SequentialTaskLogic(ManagerTermBase):
         asset.completed_target_count[env_ids] = 0
         asset.steps_inside_target[env_ids] = 0
         asset.current_phase_completed[env_ids] = False
+        asset.button_needs_release[env_ids] = False
 
         asset.phase_targets[env_ids] = self._sample_phase_targets(asset, env_ids)
         asset.current_target_id[env_ids] = asset.phase_targets[env_ids, 0]
@@ -171,6 +171,15 @@ class SequentialTaskLogic(ManagerTermBase):
             asset.target_size
         ) = self._inside_target()
 
+        if asset.button_require_release:
+            # Edge trigger: after completing a phase the (still held) button counts only
+            # after it was released once, so a button that occurs twice in a row can't
+            # be completed twice by a single press.
+            asset.button_needs_release |= completed
+            is_button = asset.target_is_button[asset.current_target_id]
+            asset.button_needs_release &= asset.inside_target & is_button
+            asset.inside_target = asset.inside_target & ~asset.button_needs_release
+
         asset.steps_inside_target += asset.inside_target
 
         if asset.task_cfg.reach.dwell_continuous:
@@ -180,7 +189,6 @@ class SequentialTaskLogic(ManagerTermBase):
             asset.steps_inside_target >= asset.current_target_dwell_steps
         )
 
-    # Completion criterion ----------------------------------------------------
 
     def _inside_target(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         asset = self.asset
@@ -197,10 +205,22 @@ class SequentialTaskLogic(ManagerTermBase):
 
         is_button = asset.target_is_button[current_target_id]
         if is_button.any():
-            sensor_adr = asset.target_sensor_adr[current_target_id].clamp(min=0)
-            touch_force = asset.data.data.sensordata[asset.env_ids, sensor_adr]
-            min_force = asset.target_min_touch_force[current_target_id]
-            button_pressed = touch_force >= min_force
+            if asset.button_press_enabled:
+                # Real button: activates once the cap is pushed in far enough.
+                button_pressed = current_button_depth(asset) >= asset.button_activation_depth
+            else:
+                sensor_adr = asset.target_sensor_adr[current_target_id].clamp(min=0)
+                touch_force = asset.data.data.sensordata[asset.env_ids, sensor_adr]
+                min_force = asset.target_min_touch_force[current_target_id]
+                button_pressed = touch_force >= min_force
             inside_target = torch.where(is_button, button_pressed, inside_target)
 
         return inside_target, distance_to_target, target_size
+
+
+def current_button_depth(asset: TaskEntity) -> torch.Tensor:
+    """Press depth [m] of the current target's cap, 0 for non-pressable targets. [num_envs]"""
+    qpos_adr = asset.target_button_qpos_adr[asset.current_target_id]
+    qpos = asset.data.data.qpos[asset.env_ids, qpos_adr.clamp(min=0)]
+    # The slide joint moves along the button normal, pressing drives it negative.
+    return torch.where(qpos_adr >= 0, (-qpos).clamp(min=0.0), torch.zeros_like(qpos))

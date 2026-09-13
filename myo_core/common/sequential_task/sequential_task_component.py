@@ -1,10 +1,9 @@
-"""Base component for sequential (target-by-target) tasks.
+"""
+Base component for sequential (target-by-target) tasks.
 
 Self-contained copy of the legacy universal task component: it builds the model with
 the configured targets, wires up observations/rewards/events/terminations and
 metrics.
-
-
 """
 
 from __future__ import annotations
@@ -65,6 +64,7 @@ class SequentialTaskComponent(myo.MyoComponent):
             "target_size": ObservationTermCfg(func=mdp.target_size, params={"asset_cfg": entity_cfg}),
             "phase_progress": ObservationTermCfg(func=mdp.phase_progress, params={"asset_cfg": entity_cfg}),
             "dwell_fraction": ObservationTermCfg(func=mdp.dwell_fraction, params={"asset_cfg": entity_cfg}),
+            "button_press_fraction": ObservationTermCfg(func=mdp.button_press_fraction, params={"asset_cfg": entity_cfg}),
         }
 
     def modify_env_cfg(self, cfg: ManagerBasedRlEnvCfg, play: bool) -> None:
@@ -396,6 +396,11 @@ class SequentialTaskComponent(myo.MyoComponent):
         # Touch-sensing zone sitting on the button surface.
         site_pos = np.array(target.site_pos.value[:3]) if target.site_pos.value is not None else np.zeros(3)
         site_size = np.array(target.site_size.value[:3]) if target.site_size.value is not None else geom_size
+
+        if self.cfg.button_press.enabled:
+            self._add_button_cap(spec, target_body, target_id, target, site_size)
+            return
+
         target_body.add_site(
             name=target_site_name,
             type=mujoco.mjtGeom.mjGEOM_BOX,
@@ -407,4 +412,66 @@ class SequentialTaskComponent(myo.MyoComponent):
             type=mujoco.mjtSensor.mjSENS_TOUCH,
             objtype=mujoco.mjtObj.mjOBJ_SITE,
             objname=target_site_name,
+        )
+
+    def _add_button_cap(
+        self,
+        spec: mujoco.MjSpec,
+        target_body: mujoco.MjsBody,
+        target_id: int,
+        target: ButtonTargetConfig,
+        cap_size: np.ndarray,
+    ) -> None:
+        """Movable cap on a spring-loaded slide joint along the button normal (local z).
+        """
+        press = self.cfg.button_press
+
+        # Housing half-height; with randomized sizes use the largest one so the cap
+        # never intersects the housing.
+        size = target.size
+        housing_half_height = size.value[2] if size.value is not None else size.max[2]
+
+        cap_body = target_body.add_body(
+            name=f"body_button_cap_{target_id}",
+            pos=[0.0, 0.0, housing_half_height + press.travel + press.cap_half_height],
+        )
+        cap_body.add_joint(
+            name=f"joint_button_{target_id}",
+            type=mujoco.mjtJoint.mjJNT_SLIDE,
+            axis=[0.0, 0.0, 1.0],
+            range=[-press.travel, 0.0],
+            limited=mujoco.mjtLimited.mjLIMITED_TRUE,
+            stiffness=press.stiffness,
+            springref=press.preload,
+            damping=press.damping,
+            # Stiff end stops (default limits let the cap sink millimeters past them).
+            solref_limit=[0.004, 1.0],
+            solimp_limit=[0.95, 0.99, 0.001, 0.5, 2.0],
+        )
+
+        half_extents = [cap_size[0], cap_size[1], press.cap_half_height]
+        cap_body.add_geom(
+            name=f"geom_button_cap_{target_id}",
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            size=half_extents,
+            rgba=[*press.cap_rgb, 1.0],
+            mass=press.cap_mass,
+            margin=target.geom_margin,
+            contype=1,
+            conaffinity=1,
+        )
+
+        # Slightly larger than the cap so contacts on its surface lie inside the site.
+        site_name = f"site_target_{target_id}"
+        cap_body.add_site(
+            name=site_name,
+            type=mujoco.mjtGeom.mjGEOM_BOX,
+            size=[e + 0.002 for e in half_extents],
+            rgba=[0.0, 0.0, 0.0, 0.0],
+        )
+        spec.add_sensor(
+            name=f"sensor_target_{target_id}",
+            type=mujoco.mjtSensor.mjSENS_TOUCH,
+            objtype=mujoco.mjtObj.mjOBJ_SITE,
+            objname=site_name,
         )
