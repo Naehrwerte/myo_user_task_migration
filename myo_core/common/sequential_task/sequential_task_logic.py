@@ -1,7 +1,3 @@
-"""
-Task logic shared by every sequential task.
-"""
-
 from __future__ import annotations
 
 import math
@@ -53,10 +49,11 @@ class SequentialTaskLogic(ManagerTermBase):
             device=env.device,
         )
 
-        dwell_steps = []
-        for t, button in zip(asset.task_cfg.targets, is_button):
-            steps = math.ceil(t.dwell_duration / env.step_dt)
-            dwell_steps.append(max(1, steps) if button else steps)
+        # At least one step inside is required, otherwise a target with dwell_duration 0
+        # would count as completed without ever being reached.
+        dwell_steps = [
+            max(1, math.ceil(t.dwell_duration / env.step_dt)) for t in asset.task_cfg.targets
+        ]
         asset.target_dwell_steps = torch.tensor(dwell_steps, dtype=torch.int32, device=env.device)
         asset.current_target_dwell_steps = asset.target_dwell_steps[asset.current_target_id]
 
@@ -73,7 +70,7 @@ class SequentialTaskLogic(ManagerTermBase):
         press_cfg = asset.task_cfg.button_press
         asset.button_press_enabled = press_cfg.enabled
         asset.button_activation_depth = press_cfg.activation_depth
-        asset.button_travel = press_cfg.travel
+        asset.button_travel = press_cfg.max_press_depth
         joint_adr = []
         for target_id, button in enumerate(is_button):
             if not (button and press_cfg.enabled):

@@ -93,26 +93,28 @@ BUTTON_HOUSING_PARTS = 5
 class ButtonPressConfig:
 
     enabled: bool = False
-    travel: float = 0.008              # maximum press depth (joint range)
+    max_press_depth: float = 0.008
     activation_depth: float = 0.006    # press depth at which the button activates
+    stiffness: float = 150.0  # spring stiffness [N/m]
+    preload: float = 0.002  # spring rest offset above the top stop, keeps the cap seated
+    damping: float = 3.0  # [N s/m] is needed to prevent "swinging" of the button after pressing it. Should be put in relation to stiffnes
+
+    #general positional stuff
     cap_half_height: float = 0.008     # the cap reaches into the hole even at rest
     pressed_protrusion: float = 0.001  # cap top above the housing when fully pressed
     hole_clearance: float = 0.0005     # gap between cap and hole wall (per side)
     cap_mass: float = 0.01
     cap_rgb: Vec3 = field(default_factory=lambda: [0.6, 0.6, 0.6])
-    stiffness: float = 150.0           # spring stiffness [N/m]
-    preload: float = 0.002             # spring rest offset above the top stop, keeps the cap seated
-    damping: float = 3.0               # [N s/m]
 
     require_release: bool = False
 
     def __post_init__(self) -> None:
-        if self.travel <= 0.0:
-            raise ValueError(f"button_press.travel must be > 0, got {self.travel}")
-        if not 0.0 < self.activation_depth <= self.travel:
+        if self.max_press_depth <= 0.0:
+            raise ValueError(f"button_press.travel must be > 0, got {self.max_press_depth}")
+        if not 0.0 < self.activation_depth <= self.max_press_depth:
             raise ValueError(
                 "button_press.activation_depth must be in (0, travel], "
-                f"got {self.activation_depth} (travel={self.travel})"
+                f"got {self.activation_depth} (travel={self.max_press_depth})"
             )
 
 

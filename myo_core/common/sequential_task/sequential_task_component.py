@@ -1,11 +1,3 @@
-"""
-Base component for sequential (target-by-target) tasks.
-
-Self-contained copy of the legacy universal task component: it builds the model with
-the configured targets, wires up observations/rewards/events/terminations and
-metrics.
-"""
-
 from __future__ import annotations
 
 from mjlab.entity import EntityArticulationInfoCfg
@@ -509,9 +501,9 @@ class SequentialTaskComponent(myo.MyoComponent):
         press = self.cfg.button_press
 
         housing_top = self._housing_half(target)[2]
-        cap_top_rest = housing_top + press.pressed_protrusion + press.travel
+        cap_top_rest = housing_top + press.pressed_protrusion + press.max_press_depth
         cap_bottom_rest = cap_top_rest - 2 * press.cap_half_height
-        cap_bottom_pressed = cap_bottom_rest - press.travel
+        cap_bottom_pressed = cap_bottom_rest - press.max_press_depth
         if cap_bottom_rest >= housing_top:
             raise ValueError(
                 "button_press.cap_half_height too small: the cap has to reach into the "
@@ -531,7 +523,7 @@ class SequentialTaskComponent(myo.MyoComponent):
             name=f"joint_button_{target_id}",
             type=mujoco.mjtJoint.mjJNT_SLIDE,
             axis=[0.0, 0.0, 1.0],
-            range=[-press.travel, 0.0],
+            range=[-press.max_press_depth, 0.0],
             limited=mujoco.mjtLimited.mjLIMITED_TRUE,
             stiffness=press.stiffness,
             springref=press.preload,

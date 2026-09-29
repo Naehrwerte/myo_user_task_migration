@@ -1,9 +1,3 @@
-"""Play-mode coloring of the targets by sequence progress (current / todo / done).
-
-Shared by every sequential task; selected with ``SequentialTaskConfig.target_state_color_mode``
-and wired up in ``SequentialTaskComponent.modify_env_cfg``.
-"""
-
 from __future__ import annotations
 
 import mujoco
