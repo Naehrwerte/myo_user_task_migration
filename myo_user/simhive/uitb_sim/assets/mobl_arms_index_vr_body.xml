@@ -393,18 +393,24 @@
                           <site name="APL-P8" pos="0.02878 -0.00674 -0.0187"/>
                           <site name="APL-P9" pos="0.03076 -0.01583 -0.01885"/>
                           <site name="APL-P6" pos="0.0332244 0.00608975 -0.00870125"/>
+                          <!-- Controller held like a real Touch controller (pistol grip):
+                               mesh frame: +x forward, +z button face, handle towards -x/-z.
+                               In the hand frame the face points to the thumb (+x), the forward
+                               axis distal (-y, tilted 10 deg towards the thumb) and the handle
+                               lies inside the curled fingers. -->
                           <geom name="controller-right" type="mesh" mesh="controller-right"
-                                pos="0.005 -0.025 -0.025" quat="0.766 0.643 0 0"
+                                pos="0.0343 -0.0783 -0.035" quat="0.5417 -0.5417 0.4545 -0.4545"
                                 mass="0.129" rgba="0.24 0.24 0.24 1.0"
                                 contype="0" conaffinity="0"/>
 
+                          <!-- Ray starts at the front of the controller and follows its forward axis. -->
                           <geom name="ray-indicator" type="capsule"
-                                fromto="0.01 -0.03 -0.015  0.01 -0.53 -0.015"
+                                fromto="0.0395 -0.1078 -0.035  0.2479 -1.2896 -0.035"
                                 size="0.003" rgba="1 0 0 0.85"
                                 contype="0" conaffinity="0" density="0"/>
 
-                          <site name="ray_origin" pos="0.01 -0.03 -0.015" size="0.005" rgba="0 0 0 0"/>
-                          <site name="ray_end"    pos="0.01 -0.53 -0.015" size="0.005" rgba="0 0 0 0"/>
+                          <site name="ray_origin" pos="0.0395 -0.1078 -0.035" size="0.005" rgba="0 0 0 0"/>
+                          <site name="ray_end"    pos="0.2479 -1.2896 -0.035" size="0.005" rgba="0 0 0 0"/>
                           <body name="index0">
                             <inertial pos="0 0 0" mass="0.001" diaginertia="0.001 0.001 0.001"/>
                             <geom name="sdfast_1seg_hand_fr_c_2mc" type="mesh" mesh="sdfast_1seg_hand_fr_c_2mc"/>

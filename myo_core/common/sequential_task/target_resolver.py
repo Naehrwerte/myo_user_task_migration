@@ -1,10 +1,16 @@
+"""OmegaConf resolver for the shared target configs.
+"""
+
 from __future__ import annotations
 
 from omegaconf import OmegaConf
 
 
+_RESOLVER_NAME = "task_target"
+
 _TARGETS: dict[str, str] = {
-    "pointing": "myo_core.task.universal.universal_task_config.PointingTargetConfig",
+    "pointing": "myo_core.common.sequential_task.sequential_task_config.PointingTargetConfig",
+    "button": "myo_core.common.sequential_task.sequential_task_config.ButtonTargetConfig",
 }
 
 
@@ -19,11 +25,11 @@ def _resolve_target(name: str) -> str:
 
 
 def register_target_resolver() -> None:
-    if OmegaConf.has_resolver("target"):
+    if OmegaConf.has_resolver(_RESOLVER_NAME):
         return
 
     OmegaConf.register_new_resolver(
-        "target",
+        _RESOLVER_NAME,
         _resolve_target,
         use_cache=True,
     )

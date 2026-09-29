@@ -14,11 +14,6 @@
             <include file="../../../../simhive/uitb_sim/assets/mobl_arms_index_vr_body.xml"/>
         </body>
 
-        <body name="target" pos="0.5 0.14 1.1">
-            <geom name="target_sphere" type="sphere" size="0.05" rgba="0.1 0.8 0.1 1"/>
-            <!-- <site name="fingertip_target" size="0.025" rgba="0.1 0.8 0.1 1" pos="0.5 0 0.8"/> -->
-        </body>
-
         <light name="scene_light" directional="true" castshadow="false"
                cutoff="4" exponent="20" diffuse="1 1 1" specular="0 0 0"
                pos="0.5 0.5 3.0"/>
