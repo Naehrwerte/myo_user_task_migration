@@ -2,8 +2,41 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import base64
+import io
 import mujoco
+from pathlib import Path
 
+def mjspec_to_string(
+    spec: mujoco.MjSpec,
+    source_xml: str | Path,
+) -> str:
+    root = Path(source_xml).expanduser().resolve().parent
+    compiler = spec.compiler
+
+    def absolute(path: str) -> str:
+        if not path:
+            return ""
+        p = Path(path)
+        return str(p if p.is_absolute() else (root / p).resolve())
+
+    compiler.meshdir = absolute(compiler.meshdir)
+    compiler.texturedir = absolute(compiler.texturedir)
+
+    # validate spec
+    spec.compile()
+
+    archive = io.BytesIO()
+    spec.to_zip(archive)
+
+    return base64.b64encode(archive.getvalue()).decode("ascii")
+
+
+def mjspec_from_string(payload: str) -> mujoco.MjSpec:
+    archive_bytes = base64.b64decode(payload.encode("ascii"))
+    archive = io.BytesIO(archive_bytes)
+
+    return mujoco.MjSpec.from_zip(archive)
 
 @dataclass(frozen=True)
 class MyoModelNames:

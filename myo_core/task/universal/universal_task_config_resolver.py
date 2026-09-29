@@ -6,6 +6,7 @@ from omegaconf import OmegaConf
 
 _TARGETS: dict[str, str] = {
     "pointing": "myo_core.task.universal.universal_task_config.PointingTargetConfig",
+    "tracking": "myo_core.task.universal.universal_task_config.TrackingTargetConfig",
     "button": "myo_core.task.universal.universal_task_config.ButtonTargetConfig",
 }
 

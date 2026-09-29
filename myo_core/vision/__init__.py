@@ -1,5 +1,6 @@
 from .vision_config import VisionConfig
 from .vision_registry import myo_create_vision
 
-from .cnn import CnnVisionConfig, CnnVisionComponent
 from .disabled import DisabledVisionConfig, DisabledVisionComponent
+from .cnn import CnnVisionConfig, CnnVisionComponent
+from .yolo import YoloVisionConfig, YoloVisionComponent

@@ -15,16 +15,22 @@ classifiers = [
 ]
 dependencies = [
     "torch",
+    "torchvision",
     "omegaconf",
     "hydra-core",
     "mujoco",
     "mujoco-warp",
-    "mjlab>=1.4.0"
+    "mjlab>=1.4.0",
+    "ultralytics>=8.4.62",
+    "h5py",
+    "mujoco-scene-editor",
+    "yourdfpy",
 ]
 
 [project.scripts]
 myo_train = "myo_core.scripts.train:main"
 myo_play = "myo_core.scripts.play:main"
+myo_export = "myo_core.scripts.export:main"
 
 [[tool.uv.index]]
 name = "nvidia"

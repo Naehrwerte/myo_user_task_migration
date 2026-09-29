@@ -1,0 +1,32 @@
+# @package _global_
+
+defaults:
+  - /myo_config@_here_
+  - _self_
+
+rl:
+  max_iterations: 1000
+  save_interval: 100
+wandb:
+  project: master
+
+task:
+  reach:
+    dwell_continuous: True
+  reward:
+    weights:
+      dc_effort: 0.005
+    distance_exponential: False
+  targets:
+    - _target_: ${target:pointing}
+      position:
+        min: [0.3, -0.15, -0.35]
+        max: [0.55, 0.15, -0.15]
+      rgb:
+        min: [0.0, 0.0, 0.0]
+        max: [1.0, 1.0, 1.0]
+      shape: sphere
+      size:
+        min: 0.02
+        max: 0.04
+      dwell_duration: 0.25

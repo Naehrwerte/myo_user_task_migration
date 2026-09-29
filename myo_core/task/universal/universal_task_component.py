@@ -1,271 +1,51 @@
 from __future__ import annotations
 
 import math
+import mujoco
+import numpy as np
+import torch
+
+from functools import partial
 from dataclasses import dataclass, field
 
 from mjlab.entity import EntityCfg, EntityArticulationInfoCfg
-from mjlab.envs import ManagerBasedRlEnvCfg, ManagerBasedRlEnv
-from mjlab.envs.mdp import Entity
+from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp import terminations as mdp_terminations
-from mjlab.envs.mdp import dr, events as event_fns
-from mjlab.envs.mdp.dr._core import Ranges
-from mjlab.managers import EventTermCfg, ManagerTermBase, MetricsTermCfg, RewardTermCfg
+from mjlab.envs.mdp import events as event_fns
+from mjlab.managers import EventTermCfg, MetricsTermCfg, RewardTermCfg
 from mjlab.managers.observation_manager import ObservationGroupCfg, ObservationTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.actuator import XmlActuatorCfg
 from mjlab.actuator.actuator import TransmissionType
-import mujoco
-import numpy as np
-import torch
 
 import myo_core.common as myo
-from .universal_task_config import UniversalTaskConfig, PointingTargetConfig
+from .universal_task_config import UniversalTaskConfig, ShapeTargetConfig, ChoiceReactionConfig, Vec3Range
+from .universal_task_entity import (
+    UniversalTaskEntityCfg,
+    UniversalTaskLogic,
+    target_pos,
+    target_size,
+    target_rgb,
+    trial_progress,
+    dwell_fraction,
+    distance_reward,
+    inside_target_reward,
+    distractor_penalty,
+    trial_bonus,
+    trial_successfully_completed,
+    episode_successfully_completed
+)
 from ..task_registry import myo_register_task
 
 _UNIVERSAL_ENTITY_NAME = "universal_robot"
 
-def _target_pos(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    asset: TaskEntity = env.scene[asset_cfg.name]
-
-    target_pos = asset.target_pos[asset.env_ids, asset.current_target_id]
-
-    return target_pos
-
-def _target_size(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    asset: TaskEntity = env.scene[asset_cfg.name]
-
-    target_size_ids = asset.target_size_ids[asset.current_target_id]
-    target_size = asset.data.model.geom_size[asset.env_ids, target_size_ids]
-
-    return target_size
-
-def _phase_progress(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    asset: TaskEntity = env.scene[asset_cfg.name]
-
-    if asset.num_targets <= 1:
-        return torch.zeros((env.num_envs, 1), device=env.device)
-
-    phase_progress = asset.current_target_id.float() / (asset.num_targets - 1)
-    phase_progress = -1.0 + 2.0 * phase_progress[:, None]
-
-    return phase_progress
-
-def _dwell_fraction(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    asset: TaskEntity = env.scene[asset_cfg.name]
-
-    dwell_fraction = (
-        (asset.current_target_dwell_steps > 0)
-        * asset.steps_inside_target
-        / asset.current_target_dwell_steps.clip(min=1)
-    )
-
-    return dwell_fraction[:, None]
-
-def _sequential_distance_reward(
-    env: ManagerBasedRlEnv,
-    asset_cfg: SceneEntityCfg,
-    exponential_distance_reward,
-    distance_metric
-) -> torch.Tensor:
-    asset: TaskEntity = env.scene[asset_cfg.name]
-
-    distance_to_target = asset.distance_to_target
-
-    if asset.num_targets > 1:
-        remaining_distance = asset.remaining_target_distances.gather(
-            dim=1,
-            index=asset.current_target_id[:, None],
-        ).squeeze(1)
-
-        distances_total = distance_to_target + remaining_distance
-    else:
-        distances_total = distance_to_target
-
-    if not exponential_distance_reward:
-        return -distances_total
-
-    outside_target = (~asset.inside_target).float()
-
-    return outside_target * (torch.exp(-distances_total * distance_metric) - 1.0) / distance_metric
-
-def _phase_bonus(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
-    asset = env.scene[asset_cfg.name]
-
-    phase_bonus = asset.current_phase_completed.float()
-
-    return phase_bonus
-
-def _phase_successfully_completed(
-    env: ManagerBasedRlEnv,
-    asset_cfg: SceneEntityCfg,
-    phase_id: int = 0,
-) -> torch.Tensor:
-    asset = env.scene[asset_cfg.name]
-
-    completed_count = asset.completed_target_count
-    current_id = asset.current_target_id
-
-    currently_completing_phase = (
-        asset.current_phase_completed
-        & (current_id == phase_id)
-    )
-
-    return (completed_count > phase_id) | currently_completing_phase
 
 @dataclass
-class TaskEntityCfg(EntityCfg):
-    task_cfg: UniversalTaskConfig | None = None
-  
-    def build(self) -> TaskEntity:
-        """Build task entity instance from this config.
-        """
-        return TaskEntity(self)
+class TaskEntitySpec:
+    spec: str
+    init_state: EntityCfg.InitialStateCfg = field(default_factory=EntityCfg.InitialStateCfg)
 
-class TaskEntity(Entity):
-    num_targets: int
-    task_cfg: UniversalTaskConfig
-
-    # index tensors
-    end_effector_site_id: int
-    target_pos_ids: torch.Tensor                 # [num_targets], long
-    target_size_ids: torch.Tensor                # [num_targets], long
-    env_ids: torch.Tensor                        # [num_envs], long
-    current_target_id: torch.Tensor              # [num_envs], long
-
-    # int tensors
-    completed_target_count: torch.Tensor         # [num_envs], int
-    steps_inside_target: torch.Tensor            # [num_envs], int
-    target_dwell_steps: torch.Tensor             # [num_targets], int
-    current_target_dwell_steps: torch.Tensor     # [num_envs], int
-
-    # bool tensors
-    inside_target: torch.Tensor                  # [num_envs], bool
-    current_phase_completed: torch.Tensor        # [num_envs], bool
-
-    # float tensors
-    distance_to_target: torch.Tensor             # [num_envs], float
-    target_size: torch.Tensor                    # [num_envs], float
-    remaining_target_distances: torch.Tensor     # [num_envs, num_targets], float
-    target_pos: torch.Tensor                     # [num_envs, num_targets, 3], float
-
-    def __init__(self, cfg: TaskEntityCfg):
-        super().__init__(cfg)
-
-        self.task_cfg = self.cfg.task_cfg
-        self.num_targets = len(self.task_cfg.targets)
-
-class SequentialTaskLogic(ManagerTermBase):
-    def __init__(self, cfg: EventTermCfg, env: ManagerBasedRlEnv):
-        asset: TaskEntity = env.scene[_UNIVERSAL_ENTITY_NAME]
-        asset_cfg: SceneEntityCfg = cfg.params['asset_cfg']
-
-        self.asset = asset
-
-        asset.end_effector_site_id = asset_cfg.site_ids[0]
-        asset.target_pos_ids = torch.tensor(asset_cfg.body_ids, dtype=torch.long, device=env.device)
-        asset.target_size_ids = torch.tensor(asset_cfg.geom_ids, dtype=torch.long, device=env.device)
-        asset.env_ids = torch.arange(env.num_envs, dtype=torch.long, device=env.device)
-        asset.current_target_id = torch.zeros(env.num_envs, dtype=torch.long, device=env.device)
-
-        asset.completed_target_count = torch.zeros(env.num_envs, dtype=torch.int32, device=env.device)
-        asset.steps_inside_target = torch.zeros(env.num_envs, dtype=torch.int32, device=env.device)
-        asset.target_dwell_steps = torch.tensor(
-            [math.ceil(t.dwell_duration / env.step_dt) for t in asset.task_cfg.targets],
-            dtype=torch.int32,
-            device=env.device
-        )
-        asset.current_target_dwell_steps = asset.target_dwell_steps[asset.current_target_id]
-
-        asset.target_pos = asset.data.body_com_pos_w[asset.env_ids[:, None], asset.target_pos_ids]
-        asset.inside_target, asset.distance_to_target, asset.target_size = self._inside_target()
-        asset.remaining_target_distances = torch.zeros((env.num_envs, asset.num_targets), dtype=torch.float32, device=env.device)
-
-        asset.current_phase_completed = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
-
-    def reset(self, env_ids: torch.Tensor | None) -> None:
-        "Note: This is run once before first initial step and always after every reset event is done by mjlab"
-        asset = self.asset
-
-        if env_ids is None:
-            env_ids = asset.env_ids
-
-        asset.current_target_id[env_ids] = 0
-        asset.completed_target_count[env_ids] = 0
-        asset.steps_inside_target[env_ids] = 0
-        asset.current_phase_completed[env_ids] = False
-
-        asset.target_pos[env_ids] = asset.data.body_com_pos_w[
-            env_ids[:, None],
-            asset.target_pos_ids,
-        ]  # [num_reset_envs, num_targets, 3]
-
-        if asset.num_targets <= 1:
-            return
-
-        segment_distances = torch.linalg.vector_norm(
-            asset.target_pos[env_ids, 1:] - asset.target_pos[env_ids, :-1],
-            dim=-1,
-        )  # [num_reset_envs, num_targets - 1]
-
-        asset.remaining_target_distances[env_ids] = 0.0
-        asset.remaining_target_distances[env_ids, : asset.num_targets - 1] = (
-            segment_distances.flip(1).cumsum(1).flip(1)
-        )
-
-    def __call__(self, env: ManagerBasedRlEnv, env_ids: None, asset_cfg: SceneEntityCfg) -> None:
-        asset = self.asset
-
-        completed = asset.current_phase_completed
-
-        asset.completed_target_count += completed
-        asset.completed_target_count.clamp_(max=asset.num_targets)
-
-        asset.steps_inside_target.masked_fill_(completed, 0)
-
-        asset.current_target_id = asset.completed_target_count.clamp(
-            max=asset.num_targets - 1
-        )
-
-        asset.current_target_dwell_steps = asset.target_dwell_steps[
-            asset.current_target_id
-        ]
-
-        (
-            asset.inside_target,
-            asset.distance_to_target,
-            asset.target_size
-        ) = self._inside_target()
-
-        asset.steps_inside_target += asset.inside_target
-
-        if asset.task_cfg.reach.dwell_continuous:
-            asset.steps_inside_target *= asset.inside_target
-
-        asset.current_phase_completed = (
-            asset.steps_inside_target >= asset.current_target_dwell_steps
-        )
-
-    def _inside_target(self) -> torch.Tensor:
-        asset = self.asset
-
-        current_target_id = asset.current_target_id
-        target_size_id = asset.target_size_ids[current_target_id]
-
-        ee_pos = asset.data.site_pos_w[asset.env_ids, asset.end_effector_site_id]
-        target_pos = asset.target_pos[asset.env_ids, current_target_id]
-        target_size = asset.data.model.geom_size[asset.env_ids, target_size_id, 0]
-
-        distance_to_target = torch.linalg.vector_norm(ee_pos - target_pos, dim=-1, keepdim=True).reshape(-1)
-        inside_target = distance_to_target < target_size
-
-        return inside_target, distance_to_target, target_size
-
-@dataclass
-class TargetDomainRandomization:
-    body_pos: dict[str, Ranges] = field(default_factory=dict)
-    geom_size: dict[str, Ranges] = field(default_factory=dict)
-    geom_rgb: dict[str, Ranges] = field(default_factory=dict)
 
 @myo_register_task("universal")
 class UniversalTaskComponent(myo.MyoComponent):
@@ -275,70 +55,84 @@ class UniversalTaskComponent(myo.MyoComponent):
         if len(self.cfg.targets) == 0:
             raise ValueError("No tragets defined")
 
-    def modify_env_cfg(self, cfg: ManagerBasedRlEnvCfg, play: bool) -> None:
-        _, target_dr, model_names = self._create_model()
+        (
+            self.spec,
+            self.entity_specs,
+            self.object_offset,
+            self.model_names
+        ) = self._create_model()
 
+    def modify_env_cfg(self, cfg: ManagerBasedRlEnvCfg, play: bool) -> None:
         cfg.scene.entities.update({
-            _UNIVERSAL_ENTITY_NAME: TaskEntityCfg(
-                spec_fn=lambda: self._create_model()[0],
+            _UNIVERSAL_ENTITY_NAME: UniversalTaskEntityCfg(
+                spec_fn=lambda: myo.mjspec_from_string(self.spec),
                 articulation=EntityArticulationInfoCfg(
                     actuators=(
                         XmlActuatorCfg(
-                            target_names_expr=tuple(model_names.tendon_names),
+                            target_names_expr=tuple(self.model_names.tendon_names),
                             transmission_type=TransmissionType.TENDON,
                         ),
                     )
                 ),
                 task_cfg=self.cfg
-            )
+            ),
         })
 
-        num_targets = len(self.cfg.targets)
+        for name, entity in self.entity_specs.items():
+            cfg.scene.entities[name] = EntityCfg(
+                spec_fn=partial(myo.mjspec_from_string, entity.spec),
+                init_state=entity.init_state
+            )
 
         entity_cfg = SceneEntityCfg(
             _UNIVERSAL_ENTITY_NAME,
-            joint_names=model_names.independent_joint_names,
-            site_names=[self.cfg.reach.end_effector_site]
-        )
-        target_entity_cfg = SceneEntityCfg(
-            _UNIVERSAL_ENTITY_NAME,
-            body_names=[f"body_target_{i}" for i in range(num_targets)],
-            geom_names=[f"geom_target_{i}" for i in range(num_targets)],
+            joint_names=self.model_names.independent_joint_names,
             site_names=[self.cfg.reach.end_effector_site]
         )
 
-        _obs_terms_complete = {
+        _avail_obs_terms = {
             "time": ObservationTermCfg(func=myo.time),
             "qpos": ObservationTermCfg(func=myo.joint_qpos, params={"asset_cfg": entity_cfg}),
             "qvel": ObservationTermCfg(func=myo.joint_qvel, params={"asset_cfg": entity_cfg}),
             "qacc": ObservationTermCfg(func=myo.joint_qacc, params={"asset_cfg": entity_cfg}),
             "act": ObservationTermCfg(func=myo.act, params={"asset_cfg": entity_cfg}),
             "ee_pos": ObservationTermCfg(func=myo.site_pos, params={"asset_cfg": entity_cfg}),
-            "target_pos": ObservationTermCfg(func=_target_pos, params={"asset_cfg": entity_cfg}),
-            "target_size": ObservationTermCfg(func=_target_size, params={"asset_cfg": entity_cfg}),
-            "phase_progress": ObservationTermCfg(func=_phase_progress, params={"asset_cfg": entity_cfg}),
-            "dwell_fraction": ObservationTermCfg(func=_dwell_fraction, params={"asset_cfg": entity_cfg}),
+            "target_pos": ObservationTermCfg(func=target_pos, params={"asset_cfg": entity_cfg}),
+            "target_color": ObservationTermCfg(func=target_rgb, params={"asset_cfg": entity_cfg}),
+            "target_size": ObservationTermCfg(func=target_size, params={"asset_cfg": entity_cfg}),
+            "trial_progress": ObservationTermCfg(func=trial_progress, params={"asset_cfg": entity_cfg}),
+            "dwell_fraction": ObservationTermCfg(func=dwell_fraction, params={"asset_cfg": entity_cfg}),
         }
+
+        def _select_obs_terms(keys: list[str]) -> dict[str, ObservationTermCfg]:
+            missing = [key for key in keys if key not in _avail_obs_terms]
+            if missing:
+                raise KeyError(f"Unknown observation keys: {missing}")
+
+            return {key: _avail_obs_terms[key] for key in keys}
 
         cfg.observations.update({
             "agent_state": ObservationGroupCfg(
-                terms={k: v for k, v in _obs_terms_complete.items() if k in self.cfg.agent_state_keys}
+                terms=_select_obs_terms(self.cfg.agent_state_keys),
             ),
             "task_state": ObservationGroupCfg(
-                terms={k: v for k, v in _obs_terms_complete.items() if k in self.cfg.task_state_keys}
+                terms=_select_obs_terms(self.cfg.task_state_keys),
+            ),
+            "task_query": ObservationGroupCfg(
+                terms=_select_obs_terms(self.cfg.task_query_keys),
             ),
         })
 
         cfg.actions.update({
             "muscles": myo.MyoMuscleActivationActionCfg(
                 entity_name=_UNIVERSAL_ENTITY_NAME,
-                actuator_names=model_names.tendon_names
+                actuator_names=self.model_names.tendon_names
             ),
         })
 
         cfg.rewards.update({
             "distance": RewardTermCfg(
-                func=_sequential_distance_reward,
+                func=distance_reward,
                 params={
                     "asset_cfg": entity_cfg,
                     "exponential_distance_reward": self.cfg.reward.distance_exponential,
@@ -346,24 +140,34 @@ class UniversalTaskComponent(myo.MyoComponent):
                 },
                 weight=self.cfg.reward.weights.get("distance", 0.0),
             ),
-            "neural_effort": RewardTermCfg(
-                func=myo.neural_effort,
+            "dc_effort": RewardTermCfg(
+                func=myo.dc_effort,
                 params={"asset_cfg": entity_cfg},
-                weight=self.cfg.reward.weights.get("neural_effort", 0.0),
+                weight=self.cfg.reward.weights.get("dc_effort", 0.0),
             ),
             "jac_effort": RewardTermCfg(
                 func=myo.jac_effort,
                 params={"asset_cfg": entity_cfg},
                 weight=self.cfg.reward.weights.get("jac_effort", 0.0),
             ),
-            "phase_bonus": RewardTermCfg(
-                func=_phase_bonus, 
+            "inside_target_reward": RewardTermCfg(
+                func=inside_target_reward,
                 params={"asset_cfg": entity_cfg},
-                weight=self.cfg.reward.weights.get("phase_bonus", 0.0),
+                weight=self.cfg.reward.weights.get("inside_target_reward", 0.0),
+            ),
+            "distractor_penalty": RewardTermCfg(
+                func=distractor_penalty,
+                params={"asset_cfg": entity_cfg},
+                weight=self.cfg.reward.weights.get("distractor_penalty", 0.0),
+            ),
+            "trial_bonus": RewardTermCfg(
+                func=trial_bonus,
+                params={"asset_cfg": entity_cfg},
+                weight=self.cfg.reward.weights.get("trial_bonus", 0.0),
             ),
             "done": RewardTermCfg(
-                func=_phase_successfully_completed, 
-                params={"asset_cfg": entity_cfg, "phase_id": num_targets - 1},
+                func=episode_successfully_completed, 
+                params={"asset_cfg": entity_cfg},
                 weight=self.cfg.reward.weights.get("done", 0.0),
             ),
         })
@@ -377,45 +181,11 @@ class UniversalTaskComponent(myo.MyoComponent):
 
             # Task logic update: check if current target is reached and update to the next target accordingly
             "task_logic_update": EventTermCfg(
-                func=SequentialTaskLogic,
-                params={"asset_cfg": target_entity_cfg},
+                func=UniversalTaskLogic,
+                params={"asset_name": _UNIVERSAL_ENTITY_NAME, "object_offset": self.object_offset},
                 mode="step",
             )
         })
-
-        if len(target_dr.body_pos) > 0:
-            cfg.events["target_pos_dr"] = EventTermCfg(
-                mode="reset",
-                func=dr.body_pos,
-                params={
-                    "asset_cfg": SceneEntityCfg(_UNIVERSAL_ENTITY_NAME, body_names=tuple(target_dr.body_pos.keys())),
-                    "ranges": target_dr.body_pos,
-                    "operation": "abs",
-                },
-            )
-
-        if len(target_dr.geom_size) > 0:
-            cfg.events["target_size_dr"] = EventTermCfg(
-                mode="reset",
-                func=dr.geom_size,
-                params={
-                    "asset_cfg": SceneEntityCfg(_UNIVERSAL_ENTITY_NAME, geom_names=tuple(target_dr.geom_size.keys())),
-                    "ranges": target_dr.geom_size,
-                    "operation": "abs",
-                },
-            )
-
-        if len(target_dr.geom_rgb) > 0:
-            cfg.events["target_rgba_dr"] = EventTermCfg(
-                mode="reset",
-                func=dr.geom_rgba,
-                params={
-                    "asset_cfg": SceneEntityCfg(_UNIVERSAL_ENTITY_NAME, geom_names=tuple(target_dr.geom_rgb.keys())),
-                    "ranges": target_dr.geom_rgb,
-                    "axes": [0, 1, 2],
-                    "operation": "abs",
-                },
-            )
 
         cfg.terminations.update({
             "time_out": TerminationTermCfg(
@@ -423,27 +193,27 @@ class UniversalTaskComponent(myo.MyoComponent):
                 time_out=True,
             ),
             "episode_success": TerminationTermCfg(
-                func=_phase_successfully_completed,
-                params={"asset_cfg": entity_cfg, "phase_id": num_targets - 1},
+                func=episode_successfully_completed,
+                params={"asset_cfg": entity_cfg},
             ),
         })
 
-        for i in range(num_targets):
-            cfg.metrics[f"phase_{i}_success"] = MetricsTermCfg(
-                func=_phase_successfully_completed,
-                params={"asset_cfg": entity_cfg, "phase_id": i},
+        for i in range(self.cfg.max_trials):
+            cfg.metrics[f"trial_{i}_success"] = MetricsTermCfg(
+                func=trial_successfully_completed,
+                params={"asset_cfg": entity_cfg, "trial_id": i},
                 reduce="last"
             )
 
         cfg.metrics.update({
+            "distance_target": MetricsTermCfg(
+                func=lambda env: env.scene[_UNIVERSAL_ENTITY_NAME].distance_to_target,
+            ),
             "inside_target": MetricsTermCfg(
-                func=lambda env: env.scene[_UNIVERSAL_ENTITY_NAME].inside_target
+                func=lambda env: env.scene[_UNIVERSAL_ENTITY_NAME].inside_target,
             ),
-            "total_initial_distance": MetricsTermCfg(
-                func=lambda env: env.scene[_UNIVERSAL_ENTITY_NAME].remaining_target_distances[:, 0]
-            ),
-            "target_size": MetricsTermCfg(
-                func=lambda env: env.scene[_UNIVERSAL_ENTITY_NAME].target_size
+            "inside_distractor": MetricsTermCfg(
+                func=lambda env: env.scene[_UNIVERSAL_ENTITY_NAME].inside_distractor,
             ),
             "completed_target_count": MetricsTermCfg(
                 func=lambda env: env.scene[_UNIVERSAL_ENTITY_NAME].completed_target_count,
@@ -451,7 +221,7 @@ class UniversalTaskComponent(myo.MyoComponent):
             ),
         })
 
-    def _create_model(self) -> tuple[mujoco.MjSpec, TargetDomainRandomization, myo.MyoModelNames]:
+    def _create_model(self) -> tuple[str, dict[str, TaskEntitySpec], torch.Tensor, myo.MyoModelNames]:
         spec = mujoco.MjSpec.from_file(self.cfg.model_path)
 
         model = spec.compile()
@@ -463,67 +233,165 @@ class UniversalTaskComponent(myo.MyoComponent):
         reference_site = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, self.cfg.reach.reference_site)
         if reference_site < 0:
             raise ValueError(f"Unknown reference site: {self.cfg.reach.reference_site}")
-        target_origin = data.site_xpos[reference_site] + np.array(self.cfg.reach.reference_offset)
+        object_offset = data.site_xpos[reference_site] + np.array(self.cfg.reach.reference_offset)
         
-        spec, dr = self._modify_spec(spec, target_origin)
+        entity_specs = self._create_entity_specs(model, data, object_offset)
+        spec_str = myo.mjspec_to_string(spec, self.cfg.model_path)
 
-        return spec, dr, model_names
+        return spec_str, entity_specs, object_offset, model_names
 
-    def _modify_spec(self, spec: mujoco.MjSpec, target_origin: np.ndarray) -> tuple[mujoco.MjSpec, TargetDomainRandomization]:
-        dr = TargetDomainRandomization()
+    def _create_entity_specs(
+        self,
+        model: mujoco.MjModel,
+        data: mujoco.MjData,
+        object_offset: np.ndarray,
+    ) -> dict[str, TaskEntitySpec]:
+        entity_specs: dict[str, TaskEntitySpec] = {}
 
-        for target_id, target in enumerate(self.cfg.targets):
-            target_body_name = f"body_target_{target_id}"
-            target_geom_name = f"geom_target_{target_id}"
+        if self.cfg.choice_reaction.enabled:
+            entity = self._create_choice_reaction_screen(model, data, object_offset)
+            entity_specs['choice_reaction'] = entity
 
-            if not isinstance(target, PointingTargetConfig):
-                raise ValueError(f"Currently only pointing targets are implemented")
-            target: PointingTargetConfig = target
+        for prefix, configs in (
+            ("target", self.cfg.targets),
+            ("distractor", self.cfg.distractors),
+        ):
+            for idx, config in enumerate(configs):
+                if not isinstance(config, ShapeTargetConfig):
+                    raise ValueError(
+                        f"Only ShapeTargetConfig is implemented; "
+                        f"got {type(config).__name__} for {prefix}_{idx}"
+                    )
 
-            body_pos = np.array(target_origin, copy=True)
-            if target.position.value is not None:
-                body_pos += np.array(target.position.value[:3])
-            else:
-                dr.body_pos[target_body_name] = {
-                    dim: (
-                        target_origin[dim] + target.position.min[dim],
-                        target_origin[dim] + target.position.max[dim]
-                    ) for dim in range(3)
-                }
+                name = f"{prefix}_{idx}"
+                entity = self._create_shape_target_spec(object_offset, config)
 
-            target_body = spec.worldbody.add_body(
-                name=target_body_name,
-                pos=body_pos
+                entity_specs[name] = entity
+
+        return entity_specs
+    
+    def _create_choice_reaction_screen(
+        self,
+        model: mujoco.MjModel,
+        data: mujoco.MjData,
+        object_offset: np.ndarray,
+    ) -> TaskEntitySpec:
+        config = self.cfg.choice_reaction
+
+        camera_id = mujoco.mj_name2id(
+            model,
+            mujoco.mjtObj.mjOBJ_CAMERA,
+            "fixed-eye-cr",
+        )
+        if camera_id < 0:
+            raise ValueError("Camera 'fixed-eye' was not found.")
+
+        camera_pos = data.cam_xpos[camera_id].copy()
+        camera_mat = data.cam_xmat[camera_id].reshape(3, 3).copy()
+
+        camera_quat = np.empty(4, dtype=np.float64)
+        mujoco.mju_mat2Quat(camera_quat, camera_mat.ravel())
+
+        distance = float(config.distance)
+        sector_x = float(config.sector_x)
+        sector_y = float(config.sector_y)
+
+        # Camera-local coordinates:
+        #   +X = rendered image right
+        #   +Y = rendered image up
+        #   -Z = in front of the camera
+        target_local_positions = {
+            "tl": np.array([-sector_x, +sector_y, -distance]),
+            "tr": np.array([+sector_x, +sector_y, -distance]),
+            "br": np.array([+sector_x, -sector_y, -distance]),
+            "bl": np.array([-sector_x, -sector_y, -distance]),
+        }
+
+        offset_extent = np.array([0.025, 0.025, 0.0])
+        world_offset_extent = np.abs(camera_mat) @ offset_extent
+
+        for idx, (name, local_pos) in enumerate(target_local_positions.items()):
+            centroid = (camera_pos + camera_mat @ local_pos) - object_offset
+            self.cfg.targets[idx].position = Vec3Range(
+                #value=centroid.tolist(),
+                min=(centroid - world_offset_extent).tolist(),
+                max=(centroid + world_offset_extent).tolist()
             )
 
-            geom_size = np.ones(3)
-            if target.size.value != None:
-                geom_size *= target.size.value
-            else:
-                dr.geom_size[target_geom_name] = {
-                    dim: (
-                        target.size.min,
-                        target.size.max
-                    ) for dim in range(3)
-                }
+        # The cue panel can have a separate XY offset, but should normally lie
+        # on the same camera-depth plane as the targets.
+        #
+        # Example cue_position: (0.0, 0.15, -distance)
+        screen_local_pos = np.asarray(config.position, dtype=np.float64)
 
-            geom_rgba = np.ones(4)
-            if target.rgb.value != None:
-                geom_rgba[:3] = np.array(target.rgb.value)
-            else:
-                dr.geom_rgb[target_geom_name] = {
-                    dim: (
-                        target.rgb.min[dim],
-                        target.rgb.max[dim]
-                    ) for dim in range(3)
-                }
-
-            target_geom = target_body.add_geom(
-                name=target_geom_name,
-                type=mujoco.mjtGeom.mjGEOM_SPHERE if target.shape == 'sphere' else mujoco.mjtGeom.mjGEOM_BOX,
-                pos=np.zeros(3),
-                size=geom_size,
-                rgba=geom_rgba
+        # Optional convenience: allow (x, y) in config and force the shared depth.
+        if screen_local_pos.shape == (2,):
+            screen_local_pos = np.array(
+                [screen_local_pos[0], screen_local_pos[1], -distance],
+                dtype=np.float64,
             )
 
-        return spec, dr
+        screen_world_pos = camera_pos + camera_mat @ screen_local_pos
+
+        # This spec only contains the visual cue panel.
+        spec = mujoco.MjSpec()
+
+        screen_body = spec.worldbody.add_body(
+            name="body",
+            mocap=True
+        )
+
+        screen_body.add_geom(
+            name="geom",
+            type=mujoco.mjtGeom.mjGEOM_SPHERE,
+            pos=np.zeros(3),
+            size=np.asarray(config.size, dtype=np.float64),
+            rgba=np.array([0.5, 0.5, 0.5, 1.0]),  # overwritten at reset
+            contype=0,
+            conaffinity=0,
+        )
+
+        return TaskEntitySpec(
+            spec=myo.mjspec_to_string(spec, self.cfg.model_path),
+            init_state=EntityCfg.InitialStateCfg(
+                pos=screen_world_pos,
+                rot=camera_quat,
+            )
+        )
+
+    def _create_shape_target_spec(
+        self,
+        object_offset: np.ndarray,
+        config: ShapeTargetConfig
+    ) -> TaskEntitySpec:
+        spec = mujoco.MjSpec()
+
+        body = spec.worldbody.add_body(
+            name="body",
+            mocap=True
+        )
+
+        geom_type = mujoco.mjtGeom.mjGEOM_SPHERE
+        if config.shape == 'capsule':
+            geom_type = mujoco.mjtGeom.mjGEOM_CAPSULE
+        elif config.shape == 'cylinder':
+            geom_type = mujoco.mjtGeom.mjGEOM_CYLINDER
+        elif config.shape == 'box':
+            geom_type = mujoco.mjtGeom.mjGEOM_BOX
+
+        body.add_geom(
+            name="geom",
+            type=geom_type,
+            pos=np.zeros(3),
+            size=np.asarray([config.size.average(), config.size.average() * 2, config.size.average() * 4]),
+            rgba=np.append(config.rgb.average(), 1.0),
+            contype=0,
+            conaffinity=0,
+        )
+
+        return TaskEntitySpec(
+            spec=myo.mjspec_to_string(spec, self.cfg.model_path),
+            init_state=EntityCfg.InitialStateCfg(
+                pos=(object_offset + config.position.average())
+            )
+        )

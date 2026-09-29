@@ -1,76 +1,108 @@
 from __future__ import annotations
 
+import numpy as np
+
 from dataclasses import dataclass
-from typing import TypeAlias, Any
+from typing import Any, ClassVar
+
 from omegaconf import OmegaConf
 
-Vec3: TypeAlias = list[float]
-
-
 @dataclass
-class ScalarRange:
-    value: float | None = None
-    min: float | None = None
-    max: float | None = None
+class RangeCfg:
+    """Base class for a fixed value or a min/max sampling range."""
+
+    DIM: ClassVar[int] = 0
+
+    value: Any | None = None
+    min: Any | None = None
+    max: Any | None = None
 
     def __post_init__(self) -> None:
         has_value = self.value is not None
         has_range = self.min is not None or self.max is not None
 
-        if has_value and has_range:
-            raise ValueError("ScalarRange must use either value or min/max, not both")
+        if has_value == has_range:
+            raise ValueError(
+                f"{type(self).__name__} requires either value or min/max."
+            )
 
-        if not has_value and (self.min is None or self.max is None):
-            raise ValueError("ScalarRange requires either value or both min and max")
-        
-    @staticmethod
-    def of(value: Any) -> ScalarRange:
-        if isinstance(value, ScalarRange):
+        self._validate_value("value", self.value)
+        self._validate_value("min", self.min)
+        self._validate_value("max", self.max)
+
+        if self.min is not None:
+            assert self.max is not None
+
+            for lo, hi in zip(self._as_list(self.min), self._as_list(self.max)):
+                if hi < lo:
+                    raise ValueError(
+                        f"{type(self).__name__}.max must be >= min."
+                    )
+
+    @classmethod
+    def of(cls, value: Any) -> "RangeCfg":
+        if isinstance(value, cls):
             return value
 
         if OmegaConf.is_config(value):
             value = OmegaConf.to_container(value, resolve=True)
 
         if isinstance(value, dict):
-            return ScalarRange(**value)
+            return cls(**value)
 
-        raise TypeError(f"Expected ScalarRange or dict, got {type(value).__name__}")
+        raise TypeError(
+            f"Expected {cls.__name__} or dict, got {type(value).__name__}."
+        )
 
+    def bounds(self) -> tuple[Any, Any]:
+        if self.value is not None:
+            return self.value, self.value
 
-@dataclass
-class Vec3Range:
-    value: Vec3 | None = None
-    min: Vec3 | None = None
-    max: Vec3 | None = None
+        assert self.min is not None
+        assert self.max is not None
+        return self.min, self.max
+    
+    def average(self) -> np.ndarray:
+        lower, upper = self.bounds()
+        return (np.asarray(lower) + np.asarray(upper)) / 2
 
-    def __post_init__(self) -> None:
-        has_value = self.value is not None
-        has_range = self.min is not None or self.max is not None
+    def _validate_value(self, name: str, value: Any | None) -> None:
+        if value is None:
+            return
 
-        if has_value and has_range:
-            raise ValueError("Vec3Range must use either value or min/max, not both")
+        if self.DIM == 1:
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise TypeError(
+                    f"{type(self).__name__}.{name} must be a scalar."
+                )
+            return
 
-        if not has_value and (self.min is None or self.max is None):
-            raise ValueError("Vec3Range requires either value or both min and max")
+        if not isinstance(value, list):
+            raise TypeError(
+                f"{type(self).__name__}.{name} must be a list of length {self.DIM}."
+            )
 
-        if self.value is not None and len(self.value) != 3:
-            raise ValueError(f"Vec3Range.value must have length 3, got {self.value}")
+        if len(value) != self.DIM:
+            raise ValueError(
+                f"{type(self).__name__}.{name} must have length {self.DIM}, "
+                f"got {len(value)}."
+            )
 
-        if self.min is not None and len(self.min) != 3:
-            raise ValueError(f"Vec3Range.min must have length 3, got {self.min}")
+        if any(not isinstance(x, (int, float)) or isinstance(x, bool) for x in value):
+            raise TypeError(
+                f"{type(self).__name__}.{name} must contain only numbers."
+            )
 
-        if self.max is not None and len(self.max) != 3:
-            raise ValueError(f"Vec3Range.max must have length 3, got {self.max}")
-        
-    @staticmethod
-    def of(value: Any) -> Vec3Range:
-        if isinstance(value, Vec3Range):
-            return value
+    def _as_list(self, value: Any) -> list[float]:
+        if self.DIM == 1:
+            assert isinstance(value, (int, float))
+            return [float(value)]
 
-        if OmegaConf.is_config(value):
-            value = OmegaConf.to_container(value, resolve=True)
+        assert isinstance(value, list)
+        return [float(x) for x in value]
 
-        if isinstance(value, dict):
-            return Vec3Range(**value)
+class ScalarRange(RangeCfg):
+    DIM = 1
 
-        raise TypeError(f"Expected Vec3Range or dict, got {type(value).__name__}")
+class Vec3Range(RangeCfg):
+    DIM = 3

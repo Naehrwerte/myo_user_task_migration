@@ -7,11 +7,10 @@
           <geom name="fixed-eye" quat="0.7106 0.25537 0.616985 0.221728" type="mesh" rgba="1 1 1 0" mesh="eye"/>
           <camera name="fixed-eye" pos="0 0 0" fovy="75"/>
         </body>
-        <body name='side_camera' pos="0.25 -0.27 1.0" euler="1.5708 0 0">
-          <camera name='side_camera' pos="0 0 1.2" fovy="70"/>
-        </body>
-        <body name='head_on_camera' pos="1.5 0.0 1.0" euler="1.5708 1.5708 0.0">
-          <camera name='head_on_camera' pos="0 0 12" fovy="10"/>
+        
+        <body name="fixed-eye-cr" pos="0 0 1.2" quat="-0.442611 -0.333375 0.504095 0.662454">
+          <geom name="fixed-eye-cr" quat="0.7106 0.25537 0.616985 0.221728" type="mesh" rgba="1 1 1 0" mesh="eye"/>
+          <camera name="fixed-eye-cr" pos="0 0 0" fovy="75"/>
         </body>
 
         <!-- <geom name="body" type="mesh" mesh="human_body" euler="0 0 3.14" contype="0" conaffinity="0"/> -->
@@ -19,6 +18,6 @@
           <include file="../../../../simhive/uitb_sim/assets/mobl_arms_index_body.xml"/>
         </body>
 
-        <light name="scene_light" directional="true" castshadow="false" cutoff="4" exponent="20" diffuse="1 1 1" specular="0 0 0" pos="0.5 0.5 3.0"/>
+        <light name="scene_light" directional="true" castshadow="false" cutoff="4" exponent="20" ambient="1 1 1" diffuse="1 1 1" specular="0 0 0" pos="0.5 0.5 3.0"/>
     </worldbody>
 </mujoco>

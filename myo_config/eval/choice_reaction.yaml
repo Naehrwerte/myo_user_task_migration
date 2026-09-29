@@ -1,0 +1,60 @@
+# @package _global_
+
+defaults:
+  - /myo_config@_here_
+  - _self_
+
+rl:
+  max_iterations: 3000
+  save_interval: 100
+wandb:
+  project: master
+
+task:
+  sequence:
+    order: RANDOM
+  choice_reaction:
+    enabled: true
+  reach:
+    dwell_continuous: True
+  reward:
+    weights:
+      dc_effort: 0.005
+    distance_exponential: False
+  targets:
+    - _target_: ${target:pointing}
+      position:
+        value: [0.0, 0.0, 0.0]
+      rgb:
+        value: [1.0, 0.0, 0.0]
+      shape: sphere
+      size:
+        value: 0.03
+      dwell_duration: 0.25
+    - _target_: ${target:pointing}
+      position:
+        value: [0.0, 0.0, 0.0]
+      rgb:
+        value: [0.0, 1.0, 0.0]
+      shape: sphere
+      size:
+        value: 0.03
+      dwell_duration: 0.25
+    - _target_: ${target:pointing}
+      position:
+        value: [0.0, 0.0, 0.0]
+      rgb:
+        value: [0.0, 0.0, 1.0]
+      shape: sphere
+      size:
+        value: 0.03
+      dwell_duration: 0.25
+    - _target_: ${target:pointing}
+      position:
+        value: [0.0, 0.0, 0.0]
+      rgb:
+        value: [1.0, 1.0, 0.0]
+      shape: sphere
+      size:
+        value: 0.03
+      dwell_duration: 0.25

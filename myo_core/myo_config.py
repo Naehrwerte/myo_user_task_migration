@@ -17,7 +17,6 @@ OmegaConf.register_new_resolver(
 class EnvConfig:
     seed: int | None = 0
     num_envs: int = 4096
-    num_play_envs: int = 1
     max_episode_length: int = 10
     decimation: int = 25
     sim_timestep: float = 0.002
@@ -57,10 +56,16 @@ class RlConfig(RslRlPpoAlgorithmCfg):
 class WanDbConfig:
     enabled: bool = True
     project: str = "mjlab"
-    name: str = "${hydra:runtime.choices.task}-${now:%Y%m%d}-${now:%H%M%S}${myo_suffix_append:${wandb.suffix}}"
+    name: str = "${hydra:runtime.choices.task}-${hydra:runtime.choices.vision}-${now:%Y%m%d}-${now:%H%M%S}${myo_suffix_append:${wandb.suffix}}"
     tags: tuple[str, ...] = ()
     suffix: str | None = None
 
+
+@dataclass
+class PlayConfig:
+    num_envs: int = 1
+    num_episodes: int | None = None
+    record_name: str = "${now:%Y%m%d}-${now:%H%M%S}"
 
 @dataclass
 class MyoConfig:
@@ -73,6 +78,7 @@ class MyoConfig:
     env: EnvConfig = field(default_factory=EnvConfig)
     rl: RlConfig = field(default_factory=RlConfig)
     wandb: WanDbConfig = field(default_factory=WanDbConfig)
+    play: PlayConfig = field(default_factory=PlayConfig)
 
     task: TaskConfig = MISSING
     vision: VisionConfig = MISSING

@@ -10,7 +10,9 @@ from .component import (
 
 from .model import (
   MyoModelNames,
-  myo_get_model_names
+  myo_get_model_names,
+  mjspec_to_string,
+  mjspec_from_string
 )
 
 from .observation import (
@@ -22,9 +24,19 @@ from .observation import (
   site_pos
 )
 
+from .recorder import (
+  H5EvalRecorder
+)
+
 from .reward import (
-  neural_effort,
+  dc_effort,
   jac_effort
+)
+
+from .sampler import (
+  BatchedDistributionSampler,
+  BatchedTrajectorySampler,
+  generate_bounded_sine_trajectories
 )
 
 from .util import (

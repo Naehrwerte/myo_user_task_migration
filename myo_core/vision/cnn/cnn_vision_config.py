@@ -6,6 +6,7 @@ class CnnVisionConfig(MonoscopicDepthVisionConfig):
     use_rgb: bool = True
     use_depth: bool = True
     spatial_softmax: bool = True
+    task_query: bool = False
 
     def __post_init__(self) -> None:
         super().__post_init__()

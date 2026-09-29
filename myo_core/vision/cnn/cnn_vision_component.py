@@ -1,11 +1,12 @@
 import torch
 from mjlab.envs import ManagerBasedRlEnvCfg, ManagerBasedRlEnv
 from mjlab.rl import RslRlOnPolicyRunnerCfg
-from mjlab.managers import ObservationTermCfg, ObservationGroupCfg
+from mjlab.managers import ObservationTermCfg, ObservationGroupCfg, RecorderTermCfg
 from mjlab.sensor import CameraSensorCfg, CameraSensor
 
 from myo_core.common import MyoComponent
 from .cnn_vision_config import CnnVisionConfig
+from .cnn_recorder import CnnRecorder
 from ..vision_registry import myo_register_vision
 
 def cnn_camera_rgb(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tensor:
@@ -117,6 +118,11 @@ class CnnVisionComponent(MyoComponent):
             concatenate_dim=0
         )
 
+        if play:
+            cfg.recorders['cnn'] = RecorderTermCfg(
+                func=CnnRecorder
+            )
+
     def modify_rl_cfg(self, cfg: RslRlOnPolicyRunnerCfg) -> None:
         if self.cfg.spatial_softmax:
             cfg.actor.class_name = "mjlab.rl.spatial_softmax:SpatialSoftmaxCNNModel"
@@ -153,7 +159,9 @@ class CnnVisionComponent(MyoComponent):
                 "flatten": True,
             }
 
+        query = (("task_query",) if self.cfg.task_query else ())
+
         cfg.obs_groups = {
-          "actor": ("agent_state", "vision_cnn"),
+          "actor": ("agent_state", "vision_cnn") + query,
           "critic": ("agent_state", "task_state")
         }

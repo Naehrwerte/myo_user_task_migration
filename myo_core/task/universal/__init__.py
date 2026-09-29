@@ -1,3 +1,4 @@
+from .universal_recorder import UniversalRecorder
 from .universal_task_config_resolver import register_target_resolver
 from .universal_task_config import UniversalTaskConfig
 from .universal_task_component import UniversalTaskComponent

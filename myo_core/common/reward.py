@@ -5,14 +5,14 @@ import torch
 
 from .observation import joint_qacc
 
-def neural_effort(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
+def dc_effort(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     asset: Entity = env.scene[asset_cfg.name]
     ctrl = asset.data.tendon_effort_target
 
     ctrl_magnitude = torch.linalg.vector_norm(ctrl, dim=-1)
-    neural_effort = -1.0 * (ctrl_magnitude ** 2)
+    effort = -0.1477 * (ctrl_magnitude ** 2)
 
-    return neural_effort
+    return effort
 
 def jac_effort(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     asset: Entity = env.scene[asset_cfg.name]
