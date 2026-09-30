@@ -134,7 +134,7 @@ Alle Terme werden immer angelegt, anschließend gewichtet aus `reward.weights` (
 | `phase_bonus` | 1 im Step, in dem eine Phase abgeschlossen wird |
 | `done` | 1, wenn die letzte Phase abgeschlossen ist |
 | `dc_effort` | −0.1477 · ‖ctrl‖² |
-| `jac_effort` | Effort + Gelenkbeschleunigungs-Kosten |
+| `jac_effort` | Aktivierungs-Effort + Gelenkbeschleunigungs-Kosten |
 
 ### 2.7 Events, Terminations, Metrics
 
