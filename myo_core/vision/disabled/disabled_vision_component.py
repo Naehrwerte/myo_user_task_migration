@@ -4,6 +4,7 @@ from mjlab.managers import RecorderTermCfg
 
 from myo_core.common import MyoComponent
 from myo_core.task.universal import UniversalRecorder
+from myo_core.task.universal.universal_task_component import _UNIVERSAL_ENTITY_NAME
 from .disabled_vision_config import DisabledVisionConfig
 from ..vision_registry import myo_register_vision
 
@@ -13,7 +14,8 @@ class DisabledVisionComponent(MyoComponent):
        self.cfg = cfg
 
     def modify_env_cfg(self, cfg: ManagerBasedRlEnvCfg, play: bool) -> None:
-        if play:
+        # The recorder reads universal-task state; other tasks use their own entity.
+        if play and _UNIVERSAL_ENTITY_NAME in cfg.scene.entities:
             cfg.recorders['universal'] = RecorderTermCfg(
                 func=UniversalRecorder
             )
